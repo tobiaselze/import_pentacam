@@ -4,3 +4,5 @@
 *.png
 *.jpg
 pentacam_output/
+models/*.onnx
+models/*.txt
