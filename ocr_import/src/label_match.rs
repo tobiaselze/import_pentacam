@@ -6,6 +6,7 @@
 
 use super::field_locate::{self, extract_numeric, LocatedField};
 use super::ocr_engine::OcrItem;
+use regex::Regex;
 use std::collections::HashMap;
 
 /// Y-range for a zone on the page.
@@ -217,6 +218,73 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
 
         if let Some((_, field)) = best {
             labeled.insert(field_name.to_string(), field);
+        }
+    }
+
+    // ── Axis extraction from "(steep)" / "(flat)" tokens ───────────────
+    let (front_y, back_y, _) = detect_zones(&items_sorted, printout_type_is_topo);
+
+    for item in &items_sorted {
+        let text_lower = item.text.to_lowercase();
+
+        // Pattern 1: "(steep) 92.2" or "(flat)88.5" — number embedded in same token
+        let steep_re = Regex::new(r"(?i)(?:steep|flat)[^0-9-]*(-?[0-9]+\.?[0-9]*)").unwrap();
+        if let Some(caps) = steep_re.captures(&item.text) {
+            let mut val_str = caps[1].to_string();
+            // Handle truncated decimal: "97." → look right for continuation digits
+            if val_str.ends_with('.') {
+                if let Some(next) = items_sorted.iter()
+                    .filter(|i| (i.cy - item.cy).abs() < 25.0 && i.cx > item.cx && i.cx - item.cx < 150.0)
+                    .min_by(|a, b| a.cx.partial_cmp(&b.cx).unwrap())
+                {
+                    let digits_re = Regex::new(r"^([0-9]+)").unwrap();
+                    if let Some(dm) = digits_re.captures(next.text.trim()) {
+                        val_str.push_str(&dm[1]);
+                    }
+                }
+            }
+            if let Ok(val) = val_str.parse::<f64>() {
+                if in_range(item.cy, front_y) && !labeled.contains_key("Axis_front") {
+                    labeled.insert("Axis_front".to_string(), LocatedField {
+                        value: val, conf: item.confidence, cx: item.cx, cy: item.cy,
+                        raw_text: item.text.clone(),
+                    });
+                } else if in_range(item.cy, back_y) && !labeled.contains_key("Axis_back") {
+                    labeled.insert("Axis_back".to_string(), LocatedField {
+                        value: val, conf: item.confidence, cx: item.cx, cy: item.cy,
+                        raw_text: item.text.clone(),
+                    });
+                }
+            }
+            continue;
+        }
+
+        // Pattern 2: "(steep)" alone — number is in a separate token to the right
+        if text_lower.contains("steep") || text_lower.contains("flat") {
+            let mut right: Vec<&OcrItem> = items_sorted.iter()
+                .filter(|i| (i.cy - item.cy).abs() < 40.0 && i.cx > item.cx && i.cx - item.cx < 300.0)
+                .copied()
+                .collect();
+            right.sort_by(|a, b| a.cx.partial_cmp(&b.cx).unwrap());
+
+            for r_item in &right {
+                if let Some(val) = extract_numeric(&r_item.text) {
+                    if val > 0.0 && val < 180.0 {
+                        if in_range(item.cy, front_y) && !labeled.contains_key("Axis_front") {
+                            labeled.insert("Axis_front".to_string(), LocatedField {
+                                value: val, conf: r_item.confidence, cx: r_item.cx, cy: r_item.cy,
+                                raw_text: format!("{} {}", item.text.trim(), r_item.text),
+                            });
+                        } else if in_range(item.cy, back_y) && !labeled.contains_key("Axis_back") {
+                            labeled.insert("Axis_back".to_string(), LocatedField {
+                                value: val, conf: r_item.confidence, cx: r_item.cx, cy: r_item.cy,
+                                raw_text: format!("{} {}", item.text.trim(), r_item.text),
+                            });
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 
