@@ -81,33 +81,29 @@ fn main() {
         }
     };
 
-    // Step 5: Show OCR items with positions (for comparison with Python reference)
-    println!("[5/5] OCR results:\n");
-    println!("{:<50} {:>6} {:>8} {:>8}", "TEXT", "CONF", "CX", "CY");
-    println!("{}", "-".repeat(76));
-    for item in &items {
-        let display: String = item.text.chars().take(50).collect();
-        println!(
-            "{:<50} {:>6.3} {:>8.1} {:>8.1}",
-            display,
-            item.confidence,
-            item.cx,
-            item.cy
-        );
-    }
-
-    // If we have a recognized printout type, try the affine fit
+    // Step 5: Label matching
     if let Some(ref pt) = printout_type {
-        println!("\n--- Affine Fit (placeholder — needs label matching first) ---");
-        let archetype = field_locate::archetype_for(pt);
-        println!("Using archetype with {} fields", archetype.len());
+        let is_topo = matches!(pt, pentacam_types::PrintoutType::TopometricKcStaging);
 
-        // Demo: extract_numeric on some OCR text
-        println!("\n--- extract_numeric demo ---");
-        for item in items.iter().take(20) {
-            if let Some(val) = field_locate::extract_numeric(&item.text) {
-                println!("  '{}' → {}", item.text, val);
-            }
+        println!("[5/6] Running label matching...");
+        let labeled = ocr_import::label_match::match_labels(&items, is_topo);
+        println!("      {} fields located by label matching", labeled.len());
+
+        // Step 6: Affine fit
+        println!("[6/6] Fitting affine transform...");
+        let archetype = field_locate::archetype_for(pt);
+        let fit = field_locate::fit_affine(&labeled, archetype);
+        println!("      alpha={:.4}, beta={:.1}, delta_cx={:.1}, resid_std={:.1}, inliers={}/{}",
+            fit.alpha, fit.beta, fit.delta_cx, fit.resid_std, fit.n_inliers, fit.n_pairs);
+
+        // Print all located fields sorted by name
+        println!("\n{:<20} {:>8} {:>8} {:>8} {:>6}  {}", "FIELD", "VALUE", "CX", "CY", "CONF", "RAW");
+        println!("{}", "-".repeat(90));
+        let mut fields: Vec<_> = labeled.iter().collect();
+        fields.sort_by_key(|(name, _)| name.clone());
+        for (name, f) in &fields {
+            println!("{:<20} {:>8.2} {:>8.1} {:>8.1} {:>6.3}  {}",
+                name, f.value, f.cx, f.cy, f.conf, f.raw_text);
         }
     }
 }
