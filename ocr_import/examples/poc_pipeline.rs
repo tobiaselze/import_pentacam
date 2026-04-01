@@ -1,4 +1,4 @@
-//! Proof-of-concept: DICOM → PDF → PNG → full-page OCR → printout detection → field location
+//! Proof-of-concept: DICOM → PDF → all pages → OCR → printout detection → field location
 //!
 //! Usage:
 //!   ORT_LIB_LOCATION=/path/to/ort/lib ORT_PREFER_DYNAMIC_LINK=1 \
@@ -34,104 +34,102 @@ fn main() {
         model_dir.join("en_ppocrv5_dict.txt").to_str().unwrap(),
     ).expect("Failed to initialize OCR engine");
 
-    // Step 1: Get a PNG image of the first page
-    let png_path = match ext.as_str() {
+    match ext.as_str() {
         "dcm" => {
-            println!("[1/5] Extracting PDF from DICOM...");
             let pdf_bytes = extract_pdf_from_dicom(input);
             let pdf_path = PathBuf::from("/tmp/_poc_pentacam.pdf");
             fs::write(&pdf_path, &pdf_bytes).expect("Failed to write temp PDF");
-            println!("[2/5] Rendering PDF page 1 at 300 DPI...");
-            render_pdf_to_png(&pdf_path, 1)
+            let n_pages = get_pdf_page_count(&pdf_path);
+            println!("DICOM: {} page(s) in embedded PDF", n_pages);
+            for page in 1..=n_pages {
+                println!("\n========== Page {}/{} ==========", page, n_pages);
+                let png = render_pdf_to_png(&pdf_path, page);
+                process_page(&png, page);
+            }
         }
         "pdf" => {
-            println!("[1/5] (skipped — input is PDF)");
-            println!("[2/5] Rendering PDF page 1 at 300 DPI...");
-            render_pdf_to_png(input, 1)
+            let n_pages = get_pdf_page_count(input);
+            println!("PDF: {} page(s)", n_pages);
+            for page in 1..=n_pages {
+                println!("\n========== Page {}/{} ==========", page, n_pages);
+                let png = render_pdf_to_png(input, page);
+                process_page(&png, page);
+            }
         }
         "png" | "jpg" | "jpeg" => {
-            println!("[1/5] (skipped — input is image)");
-            println!("[2/5] (skipped — input is image)");
-            input.to_path_buf()
+            process_page(input, 1);
         }
         _ => {
             eprintln!("Unsupported file type: {}", ext);
             std::process::exit(1);
         }
-    };
+    }
+}
 
-    // Step 3: Run full-page OCR
-    println!("[3/5] Running PaddleOCR (oar-ocr) on rendered page...");
-    let items = ocr_engine::run_full_page(&png_path)
-        .expect("OCR failed");
-    println!("      {} text regions detected", items.len());
+fn process_page(png_path: &Path, page_num: u32) {
+    let items = ocr_engine::run_full_page(png_path).expect("OCR failed");
+    println!("  OCR: {} text regions", items.len());
 
-    // Step 4: Detect printout type
-    println!("[4/5] Detecting printout type...");
     let printout_type = printout_detect::detect_printout_type(&items);
     match &printout_type {
-        Some(pt) => println!("      Detected: {:?}", pt),
+        Some(pt) => println!("  Type: {:?}", pt),
         None => {
-            println!("      No recognized printout type found.");
-            println!("\n      All OCR text (first 50 items):");
-            for item in items.iter().take(50) {
-                println!("        {:>8.1} {:>8.1}  {:.3}  {}", item.cx, item.cy, item.confidence, item.text);
-            }
+            println!("  Type: unrecognized");
             return;
         }
     };
 
-    // Step 5: Label matching
-    if let Some(ref pt) = printout_type {
-        let is_topo = matches!(pt, pentacam_types::PrintoutType::TopometricKcStaging);
+    let pt = printout_type.unwrap();
+    let is_topo = matches!(pt, pentacam_types::PrintoutType::TopometricKcStaging);
+    let labeled = ocr_import::label_match::match_labels(&items, is_topo);
 
-        println!("[5/6] Running label matching...");
-        let labeled = ocr_import::label_match::match_labels(&items, is_topo);
-        println!("      {} fields located by label matching", labeled.len());
+    let archetype = field_locate::archetype_for(&pt);
+    let fit = field_locate::fit_affine(&labeled, archetype);
+    println!("  Fields: {}/{} | alpha={:.4} beta={:.1} delta_cx={:.1} resid={:.1}",
+        labeled.len(), archetype.len(), fit.alpha, fit.beta, fit.delta_cx, fit.resid_std);
 
-        // Step 6: Affine fit
-        println!("[6/6] Fitting affine transform...");
-        let archetype = field_locate::archetype_for(pt);
-        let fit = field_locate::fit_affine(&labeled, archetype);
-        println!("      alpha={:.4}, beta={:.1}, delta_cx={:.1}, resid_std={:.1}, inliers={}/{}",
-            fit.alpha, fit.beta, fit.delta_cx, fit.resid_std, fit.n_inliers, fit.n_pairs);
-
-        // Print all located fields sorted by name
-        println!("\n{:<20} {:>8} {:>8} {:>8} {:>6}  {}", "FIELD", "VALUE", "CX", "CY", "CONF", "RAW");
-        println!("{}", "-".repeat(90));
-        let mut fields: Vec<_> = labeled.iter().collect();
-        fields.sort_by_key(|(name, _)| name.clone());
-        for (name, f) in &fields {
-            println!("{:<20} {:>8.2} {:>8.1} {:>8.1} {:>6.3}  {}",
-                name, f.value, f.cx, f.cy, f.conf, f.raw_text);
-        }
+    // Print located fields
+    let mut fields: Vec<_> = labeled.iter().collect();
+    fields.sort_by_key(|(name, _)| name.clone());
+    for (name, f) in &fields {
+        println!("    {:<20} {:>8.2}  {:.3}  {}", name, f.value, f.conf, f.raw_text);
     }
 }
 
 fn extract_pdf_from_dicom(path: &Path) -> Vec<u8> {
     use dicom_core::Tag;
     use dicom_object::open_file;
-
     let obj = open_file(path).expect("Failed to open DICOM file");
     let pdf_tag = obj
         .element(Tag(0x0042, 0x0011))
         .expect("No EncapsulatedDocument tag (0042,0011) found");
-    pdf_tag
-        .to_bytes()
-        .expect("Failed to extract PDF bytes")
-        .to_vec()
+    pdf_tag.to_bytes().expect("Failed to extract PDF bytes").to_vec()
+}
+
+fn get_pdf_page_count(pdf_path: &Path) -> u32 {
+    let output = Command::new("pdfinfo")
+        .arg(pdf_path)
+        .output()
+        .expect("Failed to run pdfinfo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.starts_with("Pages:") {
+            if let Some(n) = line.split_whitespace().last() {
+                return n.parse().unwrap_or(1);
+            }
+        }
+    }
+    1
 }
 
 fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
     let out_prefix = "/tmp/_poc_pentacam_page";
-
     // Clean up stale files
     if let Ok(entries) = glob::glob(&format!("{}*.png", out_prefix)) {
         for entry in entries.flatten() {
             let _ = fs::remove_file(entry);
         }
     }
-
     let status = Command::new("pdftoppm")
         .args([
             "-r", "300", "-png",
@@ -141,18 +139,15 @@ fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
             out_prefix,
         ])
         .status()
-        .expect("Failed to run pdftoppm — is poppler-utils installed?");
-
+        .expect("Failed to run pdftoppm");
     if !status.success() {
-        panic!("pdftoppm failed with status: {}", status);
+        panic!("pdftoppm failed");
     }
-
     let mut pages: Vec<PathBuf> = glob::glob(&format!("{}*.png", out_prefix))
         .expect("glob failed")
         .filter_map(|p| p.ok())
         .collect();
     pages.sort();
-
     if pages.is_empty() {
         panic!("pdftoppm produced no output");
     }
