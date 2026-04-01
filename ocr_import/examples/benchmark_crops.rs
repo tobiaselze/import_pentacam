@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use ocr_import::ocr_engine;
 use ocr_import::field_locate;
+use ocr_import::field_read;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -31,6 +32,7 @@ fn main() {
     // Initialize OCR engine
     let model_dir = PathBuf::from("models");
     let use_mobile = args.iter().any(|a| a == "--mobile");
+    let use_preprocess = args.iter().any(|a| a == "--preprocess");
     let det_model = if use_mobile {
         eprintln!("Using MOBILE detection model (faster, less accurate)");
         "pp-ocrv5_mobile_det.onnx"
@@ -38,6 +40,9 @@ fn main() {
         eprintln!("Using SERVER detection model (slower, more accurate)");
         "pp-ocrv5_server_det.onnx"
     };
+    if use_preprocess {
+        eprintln!("Preprocessing enabled: 3x upscale + fill_hollow_digits");
+    }
     ocr_engine::init(
         model_dir.join(det_model).to_str().unwrap(),
         model_dir.join("en_pp-ocrv5_mobile_rec.onnx").to_str().unwrap(),
@@ -100,7 +105,7 @@ fn main() {
         };
 
         // Run OCR on crop
-        let ocr_val = match run_ocr_on_crop(crop_path) {
+        let ocr_val = match run_ocr_on_crop(crop_path, use_preprocess) {
             Some(v) => v,
             None => {
                 no_ocr += 1;
@@ -158,19 +163,40 @@ fn main() {
     }
 }
 
-fn run_ocr_on_crop(path: &Path) -> Option<f64> {
-    let items = ocr_engine::run_full_page(path).ok()?;
-    // Find the best numeric value among OCR items
+fn run_ocr_on_crop(path: &Path, preprocess: bool) -> Option<f64> {
+    let ocr_path;
+    let effective_path = if preprocess {
+        // Load, preprocess, save to temp file
+        let img = image::open(path).ok()?;
+        let processed = field_read::preprocess_crop(&img);
+        let tmp = path.with_extension("_proc.png");
+        processed.save(&tmp).ok()?;
+        ocr_path = tmp;
+        &ocr_path
+    } else {
+        path
+    };
+    let items = ocr_engine::run_full_page(effective_path).ok()?;
+    if preprocess {
+        let _ = fs::remove_file(effective_path); // clean up temp
+    }
+    // Find the best numeric value among OCR items.
+    // Prefer longer text (more digits) over short fragments like "3" from "mm³".
     let mut best_val: Option<f64> = None;
     let mut best_score: f64 = -1.0;
     for item in &items {
         let stripped = item.text.trim().trim_start_matches(&['(', '['][..]);
         if stripped.is_empty() { continue; }
-        let first = stripped.chars().next()?;
+        let first = match stripped.chars().next() {
+            Some(c) => c,
+            None => continue,
+        };
         if !first.is_ascii_digit() && first != '+' && first != '-' { continue; }
         if stripped.ends_with(':') { continue; }
         if let Some(val) = field_locate::extract_numeric(&item.text) {
-            let score = item.confidence as f64 * stripped.len().max(3) as f64;
+            // Weight by text length squared to strongly prefer multi-digit values
+            let text_len = stripped.len().max(1) as f64;
+            let score = item.confidence as f64 * text_len * text_len;
             if score > best_score {
                 best_val = Some(val);
                 best_score = score;
