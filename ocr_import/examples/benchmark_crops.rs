@@ -164,27 +164,68 @@ fn main() {
 }
 
 fn run_ocr_on_crop(path: &Path, preprocess: bool) -> Option<f64> {
-    let ocr_path;
-    let effective_path = if preprocess {
-        // Load, preprocess, save to temp file
-        let img = image::open(path).ok()?;
-        let processed = field_read::preprocess_crop(&img);
-        let tmp = path.with_extension("_proc.png");
-        processed.save(&tmp).ok()?;
-        ocr_path = tmp;
-        &ocr_path
-    } else {
-        path
-    };
-    let items = ocr_engine::run_full_page(effective_path).ok()?;
-    if preprocess {
-        let _ = fs::remove_file(effective_path); // clean up temp
+    if !preprocess {
+        let items = ocr_engine::run_full_page(path).ok()?;
+        return extract_best_value(&items);
     }
+
+    // Smart strategy: try raw first. If we get a high-confidence float with
+    // decimal, use it (raw preserves decimal points that preprocessing destroys).
+    // Fall back to preprocessed if raw fails or returns no decimal.
+    let raw_items = ocr_engine::run_full_page(path).ok()?;
+    let raw_val = extract_best_value(&raw_items);
+
+    // If raw gave a good float with decimal, use it
+    if let Some(v) = raw_val {
+        // Check if this looks like a proper decimal value (not just an integer)
+        let has_decimal = raw_items.iter().any(|item| {
+            item.text.contains('.') && item.confidence > 0.8
+        });
+        if has_decimal {
+            return Some(v);
+        }
+    }
+
+    // Fall back to preprocessed
+    let img = image::open(path).ok()?;
+    let processed = field_read::preprocess_crop(&img);
+    let tmp = path.with_extension("_proc.png");
+    processed.save(&tmp).ok()?;
+    let items = ocr_engine::run_full_page(&tmp).ok()?;
+    let _ = fs::remove_file(&tmp);
+    let proc_val = extract_best_value(&items);
+
+    // Prefer preprocessed if raw failed entirely
+    if raw_val.is_none() {
+        return proc_val;
+    }
+
+    // If both succeeded, prefer preprocessed (better for hollow fonts)
+    // unless raw had a decimal and preprocessed lost it
+    match (raw_val, proc_val) {
+        (Some(rv), Some(pv)) => {
+            // If raw has decimal precision that preprocessed lost, prefer raw
+            let rv_has_frac = (rv - rv.round()).abs() > 0.001;
+            let pv_has_frac = (pv - pv.round()).abs() > 0.001;
+            if rv_has_frac && !pv_has_frac {
+                Some(rv)
+            } else {
+                Some(pv)
+            }
+        }
+        (Some(rv), None) => Some(rv),
+        (None, Some(pv)) => Some(pv),
+        (None, None) => None,
+    }
+    extract_best_value(&items)
+}
+
+fn extract_best_value(items: &[ocr_import::ocr_engine::OcrItem]) -> Option<f64> {
     // Find the best numeric value among OCR items.
     // Prefer longer text (more digits) over short fragments like "3" from "mm³".
     let mut best_val: Option<f64> = None;
     let mut best_score: f64 = -1.0;
-    for item in &items {
+    for item in items {
         let stripped = item.text.trim().trim_start_matches(&['(', '['][..]);
         if stripped.is_empty() { continue; }
         let first = match stripped.chars().next() {
