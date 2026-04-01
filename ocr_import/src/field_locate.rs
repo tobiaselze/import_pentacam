@@ -99,6 +99,36 @@ pub const ARCHETYPE_TOPO: &[(&str, f32, f32)] = &[
     ("PupilDia",       2304.0,  914.0),
 ];
 
+/// (cy_A, cx_A) for each field on Belin/Ambrosio Enhanced Ectasia pages.
+pub const ARCHETYPE_BELIN: &[(&str, f32, f32)] = &[
+    // Keratometry (data table, left column)
+    ("Belin_K1",           552.0, 2012.0),
+    ("Belin_K2",           604.0, 2012.0),
+    ("Belin_KMax",         656.0, 2012.0),
+    // Keratometry (data table, right column)
+    ("Belin_Axis",         552.0, 2376.0),
+    ("Belin_Qval",         604.0, 2374.0),
+    ("Belin_QS",           656.0, 2362.0),
+    // Pachymetry
+    ("Belin_PachyThin",    716.0, 2385.0),
+    ("Belin_DistVertex",   767.0, 2392.0),
+    // Elevation thickness
+    ("Belin_F_Ele_Th",     828.0, 2008.0),
+    ("Belin_B_Ele_Th",     828.0, 2375.0),
+    // Progression Index
+    ("Belin_Prog_Min",     933.0, 2001.0),
+    ("Belin_Prog_Max",     933.0, 2369.0),
+    ("Belin_Prog_Avg",     986.0, 2002.0),
+    ("Belin_ARTmax",       985.0, 2365.0),
+    // BAD-D scores (bottom row)
+    ("Belin_Df",          2370.0, 1947.0),
+    ("Belin_Db",          2370.0, 2178.0),
+    ("Belin_Dp",          2370.0, 2410.0),
+    ("Belin_Dt",          2370.0, 2646.0),
+    ("Belin_Da",          2370.0, 2873.0),
+    ("Belin_D_final",     2368.0, 3218.0),
+];
+
 // ---------------------------------------------------------------------------
 // Located field result
 // ---------------------------------------------------------------------------
@@ -303,6 +333,7 @@ fn median(vals: &[f64]) -> f64 {
 pub fn archetype_for(printout_type: &PrintoutType) -> &'static [(&'static str, f32, f32)] {
     match printout_type {
         PrintoutType::TopometricKcStaging => ARCHETYPE_TOPO,
+        PrintoutType::BelinAmbrosio => ARCHETYPE_BELIN,
         _ => ARCHETYPE_4MAPS,
     }
 }
