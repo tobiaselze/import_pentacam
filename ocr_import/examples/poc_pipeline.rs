@@ -1,14 +1,17 @@
-//! Proof-of-concept: DICOM → PDF → PNG → full-page OCR
+//! Proof-of-concept: DICOM → PDF → PNG → full-page OCR → printout detection → field location
 //!
 //! Usage:
-//!   cargo run -p ocr_import --example poc_pipeline -- <dicom_or_pdf_or_png>
-//!
-//! Downloads ONNX models on first run to ./models/
+//!   ORT_LIB_LOCATION=/path/to/ort/lib ORT_PREFER_DYNAMIC_LINK=1 \
+//!   cargo run -p ocr_import --example poc_pipeline --release -- <dicom_or_pdf_or_png>
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use ocr_import::ocr_engine;
+use ocr_import::printout_detect;
+use ocr_import::field_locate;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -23,25 +26,32 @@ fn main() {
         .unwrap_or("")
         .to_lowercase();
 
+    // Initialize OCR engine
+    let model_dir = PathBuf::from("models");
+    ocr_engine::init(
+        model_dir.join("pp-ocrv5_server_det.onnx").to_str().unwrap(),
+        model_dir.join("en_pp-ocrv5_mobile_rec.onnx").to_str().unwrap(),
+        model_dir.join("en_ppocrv5_dict.txt").to_str().unwrap(),
+    ).expect("Failed to initialize OCR engine");
+
     // Step 1: Get a PNG image of the first page
     let png_path = match ext.as_str() {
         "dcm" => {
-            println!("[1/4] Extracting PDF from DICOM...");
+            println!("[1/5] Extracting PDF from DICOM...");
             let pdf_bytes = extract_pdf_from_dicom(input);
             let pdf_path = PathBuf::from("/tmp/_poc_pentacam.pdf");
             fs::write(&pdf_path, &pdf_bytes).expect("Failed to write temp PDF");
-
-            println!("[2/4] Rendering PDF page 1 at 300 DPI...");
+            println!("[2/5] Rendering PDF page 1 at 300 DPI...");
             render_pdf_to_png(&pdf_path, 1)
         }
         "pdf" => {
-            println!("[1/4] (skipped — input is PDF)");
-            println!("[2/4] Rendering PDF page 1 at 300 DPI...");
+            println!("[1/5] (skipped — input is PDF)");
+            println!("[2/5] Rendering PDF page 1 at 300 DPI...");
             render_pdf_to_png(input, 1)
         }
         "png" | "jpg" | "jpeg" => {
-            println!("[1/4] (skipped — input is image)");
-            println!("[2/4] (skipped — input is image)");
+            println!("[1/5] (skipped — input is image)");
+            println!("[2/5] (skipped — input is image)");
             input.to_path_buf()
         }
         _ => {
@@ -51,32 +61,55 @@ fn main() {
     };
 
     // Step 3: Run full-page OCR
-    println!("[3/4] Running PaddleOCR (oar-ocr) on rendered page...");
-    let items = run_full_page_ocr(&png_path);
+    println!("[3/5] Running PaddleOCR (oar-ocr) on rendered page...");
+    let items = ocr_engine::run_full_page(&png_path)
+        .expect("OCR failed");
+    println!("      {} text regions detected", items.len());
 
-    // Step 4: Print results
-    println!("[4/4] Results: {} text regions detected\n", items.len());
-    println!(
-        "{:<50} {:>6} {:>8} {:>8}",
-        "TEXT", "CONF", "CX", "CY"
-    );
+    // Step 4: Detect printout type
+    println!("[4/5] Detecting printout type...");
+    let printout_type = printout_detect::detect_printout_type(&items);
+    match &printout_type {
+        Some(pt) => println!("      Detected: {:?}", pt),
+        None => {
+            println!("      No recognized printout type found.");
+            println!("\n      All OCR text (first 50 items):");
+            for item in items.iter().take(50) {
+                println!("        {:>8.1} {:>8.1}  {:.3}  {}", item.cx, item.cy, item.confidence, item.text);
+            }
+            return;
+        }
+    };
+
+    // Step 5: Show OCR items with positions (for comparison with Python reference)
+    println!("[5/5] OCR results:\n");
+    println!("{:<50} {:>6} {:>8} {:>8}", "TEXT", "CONF", "CX", "CY");
     println!("{}", "-".repeat(76));
     for item in &items {
+        let display: String = item.text.chars().take(50).collect();
         println!(
             "{:<50} {:>6.3} {:>8.1} {:>8.1}",
-            truncate(&item.text, 50),
-            item.conf,
+            display,
+            item.confidence,
             item.cx,
             item.cy
         );
     }
-}
 
-struct OcrItem {
-    text: String,
-    conf: f32,
-    cx: f32,
-    cy: f32,
+    // If we have a recognized printout type, try the affine fit
+    if let Some(ref pt) = printout_type {
+        println!("\n--- Affine Fit (placeholder — needs label matching first) ---");
+        let archetype = field_locate::archetype_for(pt);
+        println!("Using archetype with {} fields", archetype.len());
+
+        // Demo: extract_numeric on some OCR text
+        println!("\n--- extract_numeric demo ---");
+        for item in items.iter().take(20) {
+            if let Some(val) = field_locate::extract_numeric(&item.text) {
+                println!("  '{}' → {}", item.text, val);
+            }
+        }
+    }
 }
 
 fn extract_pdf_from_dicom(path: &Path) -> Vec<u8> {
@@ -94,13 +127,18 @@ fn extract_pdf_from_dicom(path: &Path) -> Vec<u8> {
 }
 
 fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
-    // Use pdftoppm (Poppler) for now — matches Python pipeline exactly.
-    // Will switch to pdfium-render once validated.
     let out_prefix = "/tmp/_poc_pentacam_page";
+
+    // Clean up stale files
+    if let Ok(entries) = glob::glob(&format!("{}*.png", out_prefix)) {
+        for entry in entries.flatten() {
+            let _ = fs::remove_file(entry);
+        }
+    }
+
     let status = Command::new("pdftoppm")
         .args([
-            "-r", "300",
-            "-png",
+            "-r", "300", "-png",
             "-f", &page.to_string(),
             "-l", &page.to_string(),
             pdf_path.to_str().unwrap(),
@@ -113,9 +151,7 @@ fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
         panic!("pdftoppm failed with status: {}", status);
     }
 
-    // pdftoppm outputs files like /tmp/_poc_pentacam_page-01.png
-    let pattern = format!("{}*.png", out_prefix);
-    let mut pages: Vec<PathBuf> = glob::glob(&pattern)
+    let mut pages: Vec<PathBuf> = glob::glob(&format!("{}*.png", out_prefix))
         .expect("glob failed")
         .filter_map(|p| p.ok())
         .collect();
@@ -125,79 +161,4 @@ fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
         panic!("pdftoppm produced no output");
     }
     pages[0].clone()
-}
-
-fn run_full_page_ocr(img_path: &Path) -> Vec<OcrItem> {
-    use oar_ocr::prelude::*;
-
-    let model_dir = PathBuf::from("models");
-    let det_path = model_dir.join("pp-ocrv5_server_det.onnx");
-    let rec_path = model_dir.join("en_pp-ocrv5_mobile_rec.onnx");
-    let dict_path = model_dir.join("en_ppocrv5_dict.txt");
-
-    // Check models exist
-    for (name, path) in [
-        ("detection", &det_path),
-        ("recognition", &rec_path),
-        ("dictionary", &dict_path),
-    ] {
-        if !path.exists() {
-            eprintln!(
-                "Model file not found: {}\n\
-                 Download from https://github.com/GreatV/oar-ocr/releases\n\
-                 and place in ./models/",
-                path.display()
-            );
-            eprintln!("Missing {} model", name);
-            std::process::exit(1);
-        }
-    }
-
-    let ocr = OAROCRBuilder::new(
-        det_path.to_str().unwrap(),
-        rec_path.to_str().unwrap(),
-        dict_path.to_str().unwrap(),
-    )
-    .build()
-    .expect("Failed to build OCR engine");
-
-    let image = load_image(img_path).expect("Failed to load image");
-    let results = ocr.predict(vec![image]).expect("OCR prediction failed");
-
-    results[0]
-        .text_regions
-        .iter()
-        .filter_map(|region| {
-            let (text, conf) = region.text_with_confidence()?;
-            let bb = &region.bounding_box;
-            // Compute centroid from bounding box
-            // BoundingBox is likely a polygon with 4 points or a rect
-            let (cx, cy) = bounding_box_centroid(bb);
-            Some(OcrItem {
-                text: text.to_string(),
-                conf,
-                cx,
-                cy,
-            })
-        })
-        .collect()
-}
-
-fn bounding_box_centroid(bb: &oar_ocr::processors::BoundingBox) -> (f32, f32) {
-    let n = bb.points.len() as f32;
-    if n == 0.0 {
-        return (0.0, 0.0);
-    }
-    let cx: f32 = bb.points.iter().map(|p| p.x).sum::<f32>() / n;
-    let cy: f32 = bb.points.iter().map(|p| p.y).sum::<f32>() / n;
-    (cx, cy)
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 3).collect();
-        format!("{}...", truncated)
-    }
 }

@@ -1,6 +1,11 @@
 //! Wrapper around oar-ocr for full-page OCR and field-crop reading.
 
+use oar_ocr::prelude::*;
+use once_cell::sync::OnceCell;
+use std::path::Path;
+
 /// A detected text region: text content, confidence, and centroid position.
+#[derive(Debug, Clone)]
 pub struct OcrItem {
     pub text: String,
     pub confidence: f32,
@@ -8,15 +13,47 @@ pub struct OcrItem {
     pub cy: f32,
 }
 
-/// Run full-page OCR on a rendered page image.
-/// Returns all detected text regions with positions.
-pub fn run_full_page(_img_path: &std::path::Path) -> Result<Vec<OcrItem>, String> {
-    todo!("Initialize oar-ocr (lazy singleton), run predict, extract items")
+/// Global OCR engine singleton.
+static OCR_ENGINE: OnceCell<OAROCR> = OnceCell::new();
+
+/// Initialize the OCR engine with model paths.
+/// Call once before any OCR operations.
+pub fn init(det_model: &str, rec_model: &str, dict_path: &str) -> Result<(), String> {
+    let ocr = OAROCRBuilder::new(det_model, rec_model, dict_path)
+        .build()
+        .map_err(|e| format!("Failed to build OCR engine: {}", e))?;
+    OCR_ENGINE.set(ocr).map_err(|_| "OCR engine already initialized".to_string())
 }
 
-/// Run OCR on a small crop image (e.g. a single field value).
-/// Upscales, applies preprocessing (fill_hollow_digits), then reads.
-/// Returns (numeric_value, confidence) or None.
-pub fn read_crop(_crop: &image::DynamicImage) -> Option<(f64, f32)> {
-    todo!("Upscale 3x, preprocess, run oar-ocr predict, extract_numeric")
+fn get_engine() -> &'static OAROCR {
+    OCR_ENGINE.get().expect("OCR engine not initialized — call ocr_engine::init() first")
+}
+
+/// Run full-page OCR on a rendered page image.
+/// Returns all detected text regions with centroid positions.
+pub fn run_full_page(img_path: &Path) -> Result<Vec<OcrItem>, String> {
+    let ocr = get_engine();
+    let image = load_image(img_path).map_err(|e| format!("Failed to load image: {}", e))?;
+    let results = ocr.predict(vec![image]).map_err(|e| format!("OCR prediction failed: {}", e))?;
+
+    let items = results[0]
+        .text_regions
+        .iter()
+        .filter_map(|region| {
+            let (text, conf) = region.text_with_confidence()?;
+            let bb = &region.bounding_box;
+            let n = bb.points.len() as f32;
+            if n == 0.0 { return None; }
+            let cx = bb.points.iter().map(|p| p.x).sum::<f32>() / n;
+            let cy = bb.points.iter().map(|p| p.y).sum::<f32>() / n;
+            Some(OcrItem {
+                text: text.trim().to_string(),
+                confidence: conf,
+                cx,
+                cy,
+            })
+        })
+        .collect();
+
+    Ok(items)
 }
