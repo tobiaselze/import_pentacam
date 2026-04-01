@@ -265,17 +265,17 @@ fn fix_radius_range(labeled: &mut HashMap<String, LocatedField>) {
     ];
 
     for field in &r_fields {
-        let entry = match labeled.get(*field) {
-            Some(e) if e.value > 12.0 => e.clone(),
+        let (val, raw) = match labeled.get(*field) {
+            Some(e) if e.value > 12.0 => (e.value, e.raw_text.clone()),
             _ => continue,
         };
-        let tok = entry.raw_text.split_whitespace().next().unwrap_or("")
+        let tok = raw.split_whitespace().next().unwrap_or("")
             .trim_end_matches(&['m', 'M'][..]);
 
         if let Some(caps) = re_spur.captures(tok) {
-            let mut e = entry;
-            e.value = caps[1].parse().unwrap_or(e.value);
-            labeled.insert(field.to_string(), e);
+            if let Ok(corrected) = caps[1].parse::<f64>() {
+                labeled.get_mut(*field).unwrap().value = corrected;
+            }
         }
     }
 }
