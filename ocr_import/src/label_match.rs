@@ -4,7 +4,7 @@
 //! For each OCR item, match label text against known patterns within
 //! y-zone ranges, then look right on the same row for the value.
 
-use super::field_locate::{extract_numeric, LocatedField};
+use super::field_locate::{self, extract_numeric, LocatedField};
 use super::ocr_engine::OcrItem;
 use std::collections::HashMap;
 
@@ -147,6 +147,119 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
                 }
                 break;
             }
+        }
+    }
+
+    // ── Phase 2: Ambiguous back-surface fields ──────────────────────────
+    // K1/K2/Km/Astig labels appear in BOTH "Cornea Back" and "True Net Power"
+    // sections on Topometric pages. After the affine fit, pick the candidate
+    // closest to the affine-predicted position.
+    let archetype = field_locate::archetype_for_type(printout_type_is_topo);
+    let fit = field_locate::fit_affine(&labeled, archetype);
+
+    let ambig_fields: &[(&str, &[&str])] = &[
+        ("K1_back",    &["k1", "ki", "kl"]),
+        ("K2_back",    &["k2", "kz"]),
+        ("Km_back",    &["km"]),
+        ("Astig_back", &["astig"]),
+    ];
+
+    for &(field_name, label_keys) in ambig_fields {
+        if labeled.contains_key(field_name) {
+            continue;
+        }
+        let arch_entry = archetype.iter().find(|&&(n, _, _)| n == field_name);
+        let (cy_ref, _cx_ref) = match arch_entry {
+            Some(&(_, cy, cx)) => (cy, cx),
+            None => continue,
+        };
+        let cy_pred = fit.alpha * cy_ref as f64 + fit.beta;
+
+        let mut best: Option<(f64, LocatedField)> = None;
+
+        for item in &items_sorted {
+            let k = item.text.to_lowercase();
+            let k = k.trim_end_matches(':').trim();
+            if !label_keys.iter().any(|&lk| k == lk || k.starts_with(lk)) {
+                continue;
+            }
+            // Only consider labels in the left portion of the page (cx < 500)
+            // to avoid matching annotations/scale text
+            if item.cx > 500.0 { continue; }
+
+            // Find first numeric token to the right on same row
+            for item2 in &items_sorted {
+                if (item2.cy - item.cy).abs() >= 25.0 { continue; }
+                if item2.cx <= item.cx { continue; }
+                if item2.cx - item.cx >= 500.0 { continue; }
+                if item2.cx >= 1100.0 { continue; }
+                let val = match extract_numeric(&item2.text) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let dist = (item.cy as f64 - cy_pred).abs();
+                let is_better = match &best {
+                    Some((best_dist, _)) => dist < *best_dist,
+                    None => true,
+                };
+                if is_better {
+                    best = Some((dist, LocatedField {
+                        value: val,
+                        conf: item2.confidence,
+                        cx: item2.cx,
+                        cy: item.cy,
+                        raw_text: item2.text.clone(),
+                    }));
+                }
+                break; // first numeric per label candidate
+            }
+        }
+
+        if let Some((_, field)) = best {
+            labeled.insert(field_name.to_string(), field);
+        }
+    }
+
+    // ── Phase 3: Affine positional fallback ──────────────────────────────
+    // For fields still missing, use the affine-predicted position and search
+    // within a tight window for the nearest numeric token.
+    let win_y: f32 = 35.0;
+    let win_x: f32 = 65.0;
+
+    for &(field_name, cy_ref, cx_ref) in archetype {
+        if labeled.contains_key(field_name) {
+            continue;
+        }
+        let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
+        let cx_pred = cx_ref + fit.delta_cx as f32;
+
+        // Find nearest numeric token within the window
+        let mut best: Option<(f32, LocatedField)> = None;
+        for item in &items_sorted {
+            if (item.cy - cy_pred).abs() > win_y { continue; }
+            if (item.cx - cx_pred).abs() > win_x { continue; }
+            let val = match extract_numeric(&item.text) {
+                Some(v) => v,
+                None => continue,
+            };
+            let dist = ((item.cy - cy_pred).powi(2) + (item.cx - cx_pred).powi(2)).sqrt();
+            let is_better = match &best {
+                Some((best_dist, _)) => dist < *best_dist,
+                None => true,
+            };
+            if is_better {
+                best = Some((dist, LocatedField {
+                    value: val,
+                    conf: item.confidence,
+                    cx: item.cx,
+                    cy: item.cy,
+                    raw_text: item.text.clone(),
+                }));
+            }
+        }
+
+        if let Some((_, field)) = best {
+            labeled.insert(field_name.to_string(), field);
         }
     }
 

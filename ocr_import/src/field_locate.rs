@@ -337,3 +337,9 @@ pub fn archetype_for(printout_type: &PrintoutType) -> &'static [(&'static str, f
         _ => ARCHETYPE_4MAPS,
     }
 }
+
+/// Select archetype based on whether the printout is Topometric.
+/// Used by label_match.rs where we don't have the full PrintoutType enum.
+pub fn archetype_for_type(is_topo: bool) -> &'static [(&'static str, f32, f32)] {
+    if is_topo { ARCHETYPE_TOPO } else { ARCHETYPE_4MAPS }
+}
