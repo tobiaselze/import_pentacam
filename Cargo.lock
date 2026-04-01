@@ -1962,6 +1962,7 @@ dependencies = [
  "imageproc 0.25.0",
  "nalgebra 0.33.3",
  "oar-ocr",
+ "oar-ocr-core",
  "once_cell",
  "pdfium-render",
  "pentacam_types",

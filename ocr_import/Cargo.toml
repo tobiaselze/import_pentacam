@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 pentacam_types = { path = "../pentacam_types" }
-oar-ocr = "0.6"
+oar-ocr = { version = "0.6", features = ["cuda"] }
+oar-ocr-core = "0.6"
 pdfium-render = "0.8"
 image = "0.25"
 imageproc = "0.25"

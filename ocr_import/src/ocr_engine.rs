@@ -1,6 +1,7 @@
 //! Wrapper around oar-ocr for full-page OCR and field-crop reading.
 
 use oar_ocr::prelude::*;
+use oar_ocr_core::core::config::{OrtSessionConfig, OrtExecutionProvider};
 use once_cell::sync::OnceCell;
 use std::path::Path;
 
@@ -17,9 +18,22 @@ pub struct OcrItem {
 static OCR_ENGINE: OnceCell<OAROCR> = OnceCell::new();
 
 /// Initialize the OCR engine with model paths.
-/// Call once before any OCR operations.
+/// Tries CUDA first, falls back to CPU.
 pub fn init(det_model: &str, rec_model: &str, dict_path: &str) -> Result<(), String> {
+    let ort_config = OrtSessionConfig::new()
+        .with_execution_providers(vec![
+            OrtExecutionProvider::CUDA {
+                device_id: None,
+                gpu_mem_limit: None,
+                arena_extend_strategy: None,
+                cudnn_conv_algo_search: None,
+                cudnn_conv_use_max_workspace: None,
+            },
+            OrtExecutionProvider::CPU,
+        ]);
+
     let ocr = OAROCRBuilder::new(det_model, rec_model, dict_path)
+        .ort_session(ort_config)
         .build()
         .map_err(|e| format!("Failed to build OCR engine: {}", e))?;
     OCR_ENGINE.set(ocr).map_err(|_| "OCR engine already initialized".to_string())
