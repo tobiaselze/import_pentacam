@@ -33,6 +33,7 @@ fn main() {
     let model_dir = PathBuf::from("models");
     let use_mobile = args.iter().any(|a| a == "--mobile");
     let use_preprocess = args.iter().any(|a| a == "--preprocess");
+    let use_postprocess = args.iter().any(|a| a == "--postprocess");
     let det_model = if use_mobile {
         eprintln!("Using MOBILE detection model (faster, less accurate)");
         "pp-ocrv5_mobile_det.onnx"
@@ -105,7 +106,7 @@ fn main() {
         };
 
         // Run OCR on crop
-        let ocr_val = match run_ocr_on_crop(crop_path, use_preprocess) {
+        let mut ocr_val = match run_ocr_on_crop(crop_path, use_preprocess) {
             Some(v) => v,
             None => {
                 no_ocr += 1;
@@ -115,6 +116,23 @@ fn main() {
                 continue;
             }
         };
+
+        // Apply postprocessing if enabled
+        if use_postprocess {
+            if let Some(val) = ocr_val {
+                // Get the raw text from the last OCR run
+                let raw = crop_path.file_stem().unwrap().to_str().unwrap_or("");
+                let mut fields = HashMap::new();
+                fields.insert(field_name.clone(), ocr_import::field_locate::LocatedField {
+                    value: val, conf: 0.9, cx: 0.0, cy: 0.0,
+                    raw_text: format!("{}", val), // simplified — real pipeline has actual raw text
+                });
+                ocr_import::postprocess::apply_corrections(&mut fields);
+                if let Some(f) = fields.get(&field_name) {
+                    ocr_val = Some(f.value);
+                }
+            }
+        }
 
         total += 1;
         *per_field_total.entry(field_name.clone()).or_insert(0) += 1;

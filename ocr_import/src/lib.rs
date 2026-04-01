@@ -19,6 +19,7 @@ pub mod printout_detect;
 pub mod field_locate;
 pub mod label_match;
 pub mod field_read;
+pub mod postprocess;
 pub mod four_maps;
 pub mod topometric;
 pub mod belin;
