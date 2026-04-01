@@ -153,7 +153,17 @@ fn main() {
 }
 
 fn discover_files(input: &Path) -> Vec<PathBuf> {
+    // If it's a .txt file, treat as a file list (one path per line)
     if input.is_file() {
+        if input.extension().and_then(|e| e.to_str()) == Some("txt") {
+            return fs::read_to_string(input)
+                .expect("Can't read file list")
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| PathBuf::from(l.trim()))
+                .filter(|p| p.exists())
+                .collect();
+        }
         return vec![input.to_path_buf()];
     }
     let mut files: Vec<PathBuf> = walkdir::WalkDir::new(input)
