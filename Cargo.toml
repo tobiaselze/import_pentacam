@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "import_pentacam",
+    "pentacam_types",
+    "dicom_import",
+    "ocr_import",
+    "blob_import",
+]
+resolver = "2"

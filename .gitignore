@@ -1,0 +1,6 @@
+/target
+*.dcm
+*.pdf
+*.png
+*.jpg
+pentacam_output/

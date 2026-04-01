@@ -1,0 +1,16 @@
+[package]
+name = "import_pentacam"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pentacam_types = { path = "../pentacam_types" }
+dicom_import = { path = "../dicom_import" }
+ocr_import = { path = "../ocr_import" }
+blob_import = { path = "../blob_import" }
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"
+walkdir = "2.5"
+csv = "1"
+serde = { version = "1", features = ["derive"] }
+blake3 = "1"
