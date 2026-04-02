@@ -9,3 +9,4 @@ models/*.txt
 ort_runtime/
 models/PaddleOCR-VL/
 models/unirec-0.1b/
+models/HunyuanOCR/

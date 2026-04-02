@@ -89,13 +89,10 @@ pub fn process_page_with_options(
     }
 
     // Step 5b: Crop-based re-reading for sign-ambiguous fields.
-    // TODO: Sign rescue needs refinement — archetype positions for coordinate fields
-    // don't match well on Topometric pages, causing wrong crops. Disabled for now.
-    // The approach works in principle (proven on individual crops) but needs
-    // per-page-type archetype awareness.
-    // if fit.n_inliers >= 5 {
-    //     crop_rescue_signs(&mut labeled, img_path, archetype, &fit);
-    // }
+    // Sign rescue: disabled — crop at located position reads wrong values on
+    // some layouts. Needs OCR bounding box for precise crop center, or
+    // pixel-based sign detection (Python's approach).
+    // crop_rescue_signs(&mut labeled, img_path);
 
     // Step 5c: Post-processing again (crop rescue may have added raw values needing fixes)
     postprocess::apply_corrections(&mut labeled);
@@ -231,8 +228,6 @@ fn crop_rescue_missing(
 fn crop_rescue_signs(
     labeled: &mut HashMap<String, LocatedField>,
     img_path: &Path,
-    archetype: &[(&str, f32, f32)],
-    fit: &field_locate::AffineFit,
 ) {
     // Fields where sign errors are common
     let sign_fields = [
@@ -265,15 +260,12 @@ fn crop_rescue_signs(
     };
     let (iw, ih) = img.dimensions();
 
-    for (field_name, current_val, cy_ref, cx_ref) in candidates {
-        let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
-        let cx_pred = cx_ref + fit.delta_cx as f32;
-
-        // Wider crop to capture the sign column (sign is to the left of the value)
+    for (field_name, current_val, cy_loc, cx_loc) in candidates {
+        // Use the located position directly — wider crop to include sign column
         let crop_half_w: u32 = 120;
         let crop_half_h: u32 = 25;
-        let cx_u = cx_pred as u32;
-        let cy_u = cy_pred as u32;
+        let cx_u = cx_loc as u32;
+        let cy_u = cy_loc as u32;
         if cx_u < crop_half_w || cy_u < crop_half_h
             || cx_u + crop_half_w >= iw || cy_u + crop_half_h >= ih
         { continue; }
