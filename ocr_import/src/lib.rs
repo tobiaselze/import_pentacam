@@ -160,10 +160,12 @@ fn crop_rescue_missing(
     };
 
     let (iw, ih) = img.dimensions();
-    let crop_half_w: u32 = 100;
-    let crop_half_h: u32 = 30;
 
     for (field_name, cy_ref, cx_ref) in missing {
+        // Wider crop for Axis fields (includes "(steep)" text left of value)
+        let is_axis = field_name.starts_with("Axis");
+        let crop_half_w: u32 = if is_axis { 180 } else { 100 };
+        let crop_half_h: u32 = if is_axis { 40 } else { 30 };
         let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
         let cx_pred = cx_ref + fit.delta_cx as f32;
 
