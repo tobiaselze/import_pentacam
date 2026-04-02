@@ -19,6 +19,7 @@ pub mod topometric;
 pub mod belin;
 pub mod demographics;
 pub mod postprocess;
+pub mod render;
 
 use pentacam_types::{PrintoutType, PrintoutResult, QaStatus};
 use field_locate::LocatedField;
