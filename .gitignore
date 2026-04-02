@@ -6,3 +6,4 @@
 pentacam_output/
 models/*.onnx
 models/*.txt
+ort_runtime/
