@@ -43,14 +43,9 @@ fn get_engine() -> &'static OAROCR {
     OCR_ENGINE.get().expect("OCR engine not initialized — call ocr_engine::init() first")
 }
 
-/// Run full-page OCR on a rendered page image.
-/// Returns all detected text regions with centroid positions.
-pub fn run_full_page(img_path: &Path) -> Result<Vec<OcrItem>, String> {
-    let ocr = get_engine();
-    let image = load_image(img_path).map_err(|e| format!("Failed to load image: {}", e))?;
-    let results = ocr.predict(vec![image]).map_err(|e| format!("OCR prediction failed: {}", e))?;
-
-    let items = results[0]
+/// Extract OcrItems from oar-ocr results.
+fn results_to_items(results: &[OAROCRResult]) -> Vec<OcrItem> {
+    results[0]
         .text_regions
         .iter()
         .filter_map(|region| {
@@ -67,7 +62,20 @@ pub fn run_full_page(img_path: &Path) -> Result<Vec<OcrItem>, String> {
                 cy,
             })
         })
-        .collect();
+        .collect()
+}
 
-    Ok(items)
+/// Run full-page OCR on an image file.
+pub fn run_full_page(img_path: &Path) -> Result<Vec<OcrItem>, String> {
+    let ocr = get_engine();
+    let image = load_image(img_path).map_err(|e| format!("Failed to load image: {}", e))?;
+    let results = ocr.predict(vec![image]).map_err(|e| format!("OCR prediction failed: {}", e))?;
+    Ok(results_to_items(&results))
+}
+
+/// Run full-page OCR on an in-memory RGB image. No temp files needed.
+pub fn run_full_page_mem(image: image::RgbImage) -> Result<Vec<OcrItem>, String> {
+    let ocr = get_engine();
+    let results = ocr.predict(vec![image]).map_err(|e| format!("OCR prediction failed: {}", e))?;
+    Ok(results_to_items(&results))
 }
