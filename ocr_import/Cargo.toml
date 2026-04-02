@@ -7,7 +7,7 @@ edition = "2021"
 pentacam_types = { path = "../pentacam_types" }
 oar-ocr = { version = "0.6", features = ["cuda"] }
 oar-ocr-core = "0.6"
-oar-ocr-vl = "0.6"
+oar-ocr-vl = { version = "0.6", features = ["cuda"] }
 mupdf = "0.6"
 image = "0.25"
 imageproc = "0.25"

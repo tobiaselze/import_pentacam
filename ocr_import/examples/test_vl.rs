@@ -50,7 +50,15 @@ fn main() {
 
     eprintln!("Loaded {} images", rgb_images.len());
 
-    let device = candle_core::Device::Cpu; // Use CPU for now; CUDA needs feature flag
+    let device = if args.iter().any(|a| a == "--cpu") {
+        eprintln!("Using CPU");
+        candle_core::Device::Cpu
+    } else {
+        match candle_core::Device::new_cuda(0) {
+            Ok(d) => { eprintln!("Using CUDA GPU 0"); d }
+            Err(_) => { eprintln!("CUDA not available, falling back to CPU"); candle_core::Device::Cpu }
+        }
+    };
 
     match model_name {
         "paddleocr-vl" => {
@@ -86,6 +94,26 @@ fn main() {
 
             eprintln!("Running inference...");
             let results = model.generate(&rgb_images, 256);
+
+            for (path, result) in images.iter().zip(results.iter()) {
+                println!("=== {} ===", path.display());
+                match result {
+                    Ok(text) => println!("{}", text),
+                    Err(e) => println!("ERROR: {}", e),
+                }
+                println!();
+            }
+        }
+        "hunyuanocr" => {
+            use oar_ocr_vl::HunyuanOcr;
+
+            eprintln!("Loading HunyuanOCR from {}...", model_dir.display());
+            let model = HunyuanOcr::from_dir(&model_dir, device)
+                .expect("Failed to load HunyuanOCR");
+
+            let prompt = "Transcribe the exact numeric value printed in this image. Reply with ONLY the number, nothing else.";
+            eprintln!("Running inference with prompt: {}", prompt);
+            let results = model.generate(&rgb_images, &vec![prompt; rgb_images.len()], 64);
 
             for (path, result) in images.iter().zip(results.iter()) {
                 println!("=== {} ===", path.display());
