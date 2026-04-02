@@ -45,15 +45,44 @@ fn render_mupdf(pdf_bytes: &[u8], page: u32, dpi: u32) -> Result<PathBuf, String
     let pg = doc.load_page((page - 1) as i32)
         .map_err(|e| format!("MuPDF load page {}: {}", page, e))?;
 
-    let scale = dpi as f32 / 72.0;
+    // Render at 2x DPI then downscale with Lanczos — supersampling preserves
+    // small features (decimal points, minus signs) that MuPDF's renderer
+    // otherwise renders too thin for OCR to detect.
+    let render_dpi = dpi * 2;
+    let scale = render_dpi as f32 / 72.0;
     let ctm = Matrix::new_scale(scale, scale);
     let cs = Colorspace::device_rgb();
     let pixmap = pg.to_pixmap(&ctm, &cs, false, false)
         .map_err(|e| format!("MuPDF render: {}", e))?;
 
+    // Convert MuPDF pixmap to image::RgbImage for downscaling
+    let w = pixmap.width();
+    let h = pixmap.height();
+    let samples = pixmap.samples();
+    let n_channels = pixmap.n() as u32;
+
+    let rgb_img = if n_channels >= 3 {
+        let mut img = image::RgbImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) as usize * n_channels as usize;
+                img.put_pixel(x, y, image::Rgb([
+                    samples[idx], samples[idx + 1], samples[idx + 2]
+                ]));
+            }
+        }
+        image::DynamicImage::ImageRgb8(img)
+    } else {
+        return Err("Unexpected pixel format".to_string());
+    };
+
+    // Downscale to target DPI with Lanczos
+    let target_w = w / 2;
+    let target_h = h / 2;
+    let downscaled = rgb_img.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3);
+
     let out_path = PathBuf::from(format!("/tmp/_mupdf_render_p{}.png", page));
-    pixmap.save_as(&out_path.to_str().unwrap(), mupdf::pixmap::ImageFormat::PNG)
-        .map_err(|e| format!("MuPDF save PNG: {}", e))?;
+    downscaled.save(&out_path).map_err(|e| format!("Save PNG: {}", e))?;
 
     Ok(out_path)
 }
