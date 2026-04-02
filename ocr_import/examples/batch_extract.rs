@@ -29,6 +29,13 @@ fn main() {
         .map(|s| PathBuf::from(s))
         .unwrap_or_else(|| PathBuf::from("pentacam_results.csv"));
     let use_mobile = args.iter().any(|a| a == "--mobile");
+    let renderer = if args.iter().any(|a| a == "--mupdf") {
+        eprintln!("Using MuPDF renderer");
+        ocr_import::render::Renderer::MuPdf
+    } else {
+        eprintln!("Using Poppler renderer (pdftoppm)");
+        ocr_import::render::Renderer::Poppler
+    };
 
     // Initialize OCR
     let model_dir = PathBuf::from("models");
@@ -88,7 +95,7 @@ fn main() {
 
         let pages: Vec<(PathBuf, u32)> = match ext.as_str() {
             "dcm" => {
-                match extract_and_render_pdf(file_path) {
+                match extract_and_render_pdf(file_path, renderer) {
                     Ok(pages) => pages,
                     Err(e) => {
                         eprintln!("  ERROR {}: {}", file_path.display(), e);
@@ -179,15 +186,14 @@ fn discover_files(input: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn extract_and_render_pdf(dcm_path: &Path) -> Result<Vec<(PathBuf, u32)>, String> {
+fn extract_and_render_pdf(dcm_path: &Path, renderer: ocr_import::render::Renderer) -> Result<Vec<(PathBuf, u32)>, String> {
     let pdf_bytes = dicom_import::extract_pdf_bytes(dcm_path)?
         .ok_or_else(|| "No embedded PDF".to_string())?;
-    let pdf_path = PathBuf::from("/tmp/_batch_pentacam.pdf");
-    fs::write(&pdf_path, &pdf_bytes).map_err(|e| format!("Write PDF: {}", e))?;
-    let n_pages = get_pdf_page_count(&pdf_path);
+    let n_pages = ocr_import::render::page_count(&pdf_bytes, renderer)?;
     let mut pages = Vec::new();
     for p in 1..=n_pages {
-        pages.push((render_pdf_to_png(&pdf_path, p), p));
+        let png = ocr_import::render::render_pdf_page(&pdf_bytes, p, 300, renderer)?;
+        pages.push((png, p));
     }
     Ok(pages)
 }
