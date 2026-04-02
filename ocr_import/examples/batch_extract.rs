@@ -29,6 +29,22 @@ fn main() {
         .map(|s| PathBuf::from(s))
         .unwrap_or_else(|| PathBuf::from("pentacam_results.csv"));
     let use_mobile = args.iter().any(|a| a == "--mobile");
+    let save_opts = args.iter()
+        .position(|a| a == "--save-crops")
+        .map(|_| {
+            let dir = args.iter()
+                .position(|a| a == "--crop-dir")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| PathBuf::from(s))
+                .unwrap_or_else(|| PathBuf::from("crops_output"));
+            ocr_import::SaveOptions {
+                output_dir: dir,
+                save_pages: true,
+                save_crops: true,
+                crop_pad: 15,
+            }
+        });
+
     let renderer = if args.iter().any(|a| a == "--mupdf") {
         eprintln!("Using MuPDF renderer");
         ocr_import::render::Renderer::MuPdf
@@ -114,7 +130,9 @@ fn main() {
         };
 
         for (png_path, page_num) in &pages {
-            let result = ocr_import::process_page(png_path, file_path, *page_num as usize);
+            let result = ocr_import::process_page_with_options(
+                png_path, file_path, *page_num as usize, save_opts.as_ref()
+            );
 
             if let Some(ref res) = result {
                 let fname = file_path.file_name().unwrap().to_str().unwrap();
