@@ -221,14 +221,65 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
         }
     }
 
-    // ── Axis extraction from "(steep)" / "(flat)" tokens ───────────────
+    // ── Phase 3: Affine positional fallback (with token merging) ────────
+    // For fields still missing, use the affine-predicted position and search
+    // within a tight window. Merge adjacent tokens left-to-right so split
+    // numbers ('38' + '.1') reassemble into '38 .1' → 38.1.
+    let win_y: f32 = 35.0;
+    let win_x: f32 = 65.0;
+
+    for &(field_name, cy_ref, cx_ref) in archetype {
+        if labeled.contains_key(field_name) {
+            continue;
+        }
+        let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
+        let cx_pred = cx_ref + fit.delta_cx as f32;
+
+        // Collect all tokens in the window, sorted left-to-right
+        let mut candidates: Vec<&OcrItem> = items_sorted.iter()
+            .filter(|item| {
+                (item.cy - cy_pred).abs() <= win_y
+                    && (item.cx - cx_pred).abs() <= win_x
+            })
+            .copied()
+            .collect();
+        candidates.sort_by(|a, b| a.cx.partial_cmp(&b.cx).unwrap());
+
+        if candidates.is_empty() { continue; }
+
+        // Merge all token texts left-to-right
+        let merged: String = candidates.iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let best_conf = candidates.iter()
+            .map(|c| c.confidence)
+            .fold(0.0f32, f32::max);
+        let cx0 = candidates[0].cx;
+        let cy0 = candidates[0].cy;
+
+        if let Some(val) = extract_numeric(&merged) {
+            labeled.insert(field_name.to_string(), LocatedField {
+                value: val,
+                conf: best_conf,
+                cx: cx0,
+                cy: cy0,
+                raw_text: merged,
+            });
+        }
+    }
+
+    // ── Axis extraction from "(steep)" / "(flat)" tokens ─────────────
+    // Runs AFTER Phase 3 so it can fill in Axis fields that the numeric
+    // fallback missed (because the token starts with "steep"/"flat").
     let (front_y, back_y, _) = detect_zones(&items_sorted, printout_type_is_topo);
+    let steep_re = Regex::new(r"(?i)(?:steep|flat)[^0-9-]*(-?[0-9]+\.?[0-9]*)").unwrap();
+    let digits_re = Regex::new(r"^([0-9]+)").unwrap();
 
     for item in &items_sorted {
         let text_lower = item.text.to_lowercase();
 
         // Pattern 1: "(steep) 92.2" or "(flat)88.5" — number embedded in same token
-        let steep_re = Regex::new(r"(?i)(?:steep|flat)[^0-9-]*(-?[0-9]+\.?[0-9]*)").unwrap();
         if let Some(caps) = steep_re.captures(&item.text) {
             let mut val_str = caps[1].to_string();
             // Handle truncated decimal: "97." → look right for continuation digits
@@ -237,7 +288,6 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
                     .filter(|i| (i.cy - item.cy).abs() < 25.0 && i.cx > item.cx && i.cx - item.cx < 150.0)
                     .min_by(|a, b| a.cx.partial_cmp(&b.cx).unwrap())
                 {
-                    let digits_re = Regex::new(r"^([0-9]+)").unwrap();
                     if let Some(dm) = digits_re.captures(next.text.trim()) {
                         val_str.push_str(&dm[1]);
                     }
@@ -285,49 +335,6 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
                     }
                 }
             }
-        }
-    }
-
-    // ── Phase 3: Affine positional fallback ──────────────────────────────
-    // For fields still missing, use the affine-predicted position and search
-    // within a tight window for the nearest numeric token.
-    let win_y: f32 = 35.0;
-    let win_x: f32 = 65.0;
-
-    for &(field_name, cy_ref, cx_ref) in archetype {
-        if labeled.contains_key(field_name) {
-            continue;
-        }
-        let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
-        let cx_pred = cx_ref + fit.delta_cx as f32;
-
-        // Find nearest numeric token within the window
-        let mut best: Option<(f32, LocatedField)> = None;
-        for item in &items_sorted {
-            if (item.cy - cy_pred).abs() > win_y { continue; }
-            if (item.cx - cx_pred).abs() > win_x { continue; }
-            let val = match extract_numeric(&item.text) {
-                Some(v) => v,
-                None => continue,
-            };
-            let dist = ((item.cy - cy_pred).powi(2) + (item.cx - cx_pred).powi(2)).sqrt();
-            let is_better = match &best {
-                Some((best_dist, _)) => dist < *best_dist,
-                None => true,
-            };
-            if is_better {
-                best = Some((dist, LocatedField {
-                    value: val,
-                    conf: item.confidence,
-                    cx: item.cx,
-                    cy: item.cy,
-                    raw_text: item.text.clone(),
-                }));
-            }
-        }
-
-        if let Some((_, field)) = best {
-            labeled.insert(field_name.to_string(), field);
         }
     }
 
