@@ -7,3 +7,5 @@ pentacam_output/
 models/*.onnx
 models/*.txt
 ort_runtime/
+models/PaddleOCR-VL/
+models/unirec-0.1b/
