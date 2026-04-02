@@ -3,7 +3,7 @@
 use pentacam_types::{DicomMeta, DicomSrValues, Laterality};
 use std::path::Path;
 
-use dicom_object::open_file;
+use dicom_object::{open_file, InMemDicomObject};
 use dicom_core::Tag;
 
 /// Extract standard DICOM metadata tags.
@@ -39,11 +39,63 @@ pub fn extract_metadata(path: &Path) -> Result<DicomMeta, String> {
     })
 }
 
-/// Extract Structured Report values. TODO: implement SR walking for dicom-object 0.6.
-pub fn extract_sr(_path: &Path) -> Result<Option<DicomSrValues>, String> {
-    // SR extraction requires walking the ContentSequence tree.
-    // Deferred — the OCR pipeline provides the same values.
-    Ok(None)
+/// Extract Structured Report numeric values from ContentSequence (0040,a730).
+/// Returns None if the SR tag is not present (firmware <1.30).
+pub fn extract_sr(path: &Path) -> Result<Option<DicomSrValues>, String> {
+    let obj = open_file(path).map_err(|e| format!("Failed to open DICOM: {}", e))?;
+
+    let elem = match obj.element(Tag(0x0040, 0xa730)) {
+        Ok(e) => e,
+        Err(_) => return Ok(None),
+    };
+
+    let items = match elem.value().items() {
+        Some(items) => items,
+        None => return Ok(None),
+    };
+
+    let mut results = DicomSrValues::new();
+    for item in items {
+        walk_sr_item(item, &mut results);
+    }
+
+    if results.is_empty() { Ok(None) } else { Ok(Some(results)) }
+}
+
+fn walk_sr_item(item: &InMemDicomObject, results: &mut DicomSrValues) {
+    let get_str = |obj: &InMemDicomObject, tag: Tag| -> Option<String> {
+        obj.element(tag).ok().and_then(|e| e.to_str().ok()).map(|s| s.trim().to_string())
+    };
+
+    // Check ValueType == "NUM"
+    let value_type = get_str(item, Tag(0x0040, 0xa040)).unwrap_or_default();
+    if value_type == "NUM" {
+        // Get CodeValue from ConceptNameCodeSequence
+        let code = item.element(Tag(0x0040, 0xa043)).ok()
+            .and_then(|e| e.value().items())
+            .and_then(|seq| seq.first())
+            .and_then(|code_item| get_str(code_item, Tag(0x0008, 0x0100)));
+
+        // Get NumericValue from MeasuredValueSequence
+        let value = item.element(Tag(0x0040, 0xa300)).ok()
+            .and_then(|e| e.value().items())
+            .and_then(|seq| seq.first())
+            .and_then(|mv_item| get_str(mv_item, Tag(0x0040, 0xa30a)))
+            .and_then(|s| s.parse::<f64>().ok());
+
+        if let (Some(code), Some(val)) = (code, value) {
+            results.insert(format!("DICOM_{}", code), val);
+        }
+    }
+
+    // Recurse into nested ContentSequence
+    if let Ok(nested) = item.element(Tag(0x0040, 0xa730)) {
+        if let Some(sub_items) = nested.value().items() {
+            for sub_item in sub_items {
+                walk_sr_item(sub_item, results);
+            }
+        }
+    }
 }
 
 /// Extract raw PDF bytes from EncapsulatedDocument tag (0042,0011).
