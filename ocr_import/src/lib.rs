@@ -88,7 +88,16 @@ pub fn process_page_with_options(
         crop_rescue_missing(&mut labeled, img_path, archetype, &fit);
     }
 
-    // Step 5b: Post-processing again (crop rescue may have added raw values needing fixes)
+    // Step 5b: Crop-based re-reading for sign-ambiguous fields.
+    // TODO: Sign rescue needs refinement — archetype positions for coordinate fields
+    // don't match well on Topometric pages, causing wrong crops. Disabled for now.
+    // The approach works in principle (proven on individual crops) but needs
+    // per-page-type archetype awareness.
+    // if fit.n_inliers >= 5 {
+    //     crop_rescue_signs(&mut labeled, img_path, archetype, &fit);
+    // }
+
+    // Step 5c: Post-processing again (crop rescue may have added raw values needing fixes)
     postprocess::apply_corrections(&mut labeled);
 
     // Step 6: Save crops if requested
@@ -210,6 +219,91 @@ fn crop_rescue_missing(
             }
         }
 
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+}
+
+/// Crop-based re-reading for sign-ambiguous fields.
+///
+/// For coordinate fields and Qval where the full-page OCR may have missed
+/// the minus sign: crop a wider region including the sign column, preprocess,
+/// re-OCR, and use the crop value if it has a different sign.
+fn crop_rescue_signs(
+    labeled: &mut HashMap<String, LocatedField>,
+    img_path: &Path,
+    archetype: &[(&str, f32, f32)],
+    fit: &field_locate::AffineFit,
+) {
+    // Fields where sign errors are common
+    let sign_fields = [
+        "Kmax_x", "Kmax_y",
+        "PupilCenter_x", "PupilCenter_y",
+        "PachyVertex_x", "PachyVertex_y",
+        "Thinnest_x", "Thinnest_y",
+        "Qval_front", "Qval_back",
+    ];
+
+    // Only re-crop fields that have a value (not missing) and are positive
+    // (the sign might have been lost)
+    let candidates: Vec<(&str, f64, f32, f32)> = sign_fields.iter()
+        .filter_map(|&name| {
+            let loc = labeled.get(name)?;
+            // Only re-crop if value is positive (could be missing negative sign)
+            // For Qval: typically negative, so positive is suspicious
+            // For coordinates: could be either sign, re-crop to verify
+            if loc.value <= 0.0 { return None; }
+            // Use the LOCATED position — the field was already found here
+            Some((name, loc.value, loc.cy, loc.cx))
+        })
+        .collect();
+
+    if candidates.is_empty() { return; }
+
+    let img = match image::open(img_path) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let (iw, ih) = img.dimensions();
+
+    for (field_name, current_val, cy_ref, cx_ref) in candidates {
+        let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
+        let cx_pred = cx_ref + fit.delta_cx as f32;
+
+        // Wider crop to capture the sign column (sign is to the left of the value)
+        let crop_half_w: u32 = 120;
+        let crop_half_h: u32 = 25;
+        let cx_u = cx_pred as u32;
+        let cy_u = cy_pred as u32;
+        if cx_u < crop_half_w || cy_u < crop_half_h
+            || cx_u + crop_half_w >= iw || cy_u + crop_half_h >= ih
+        { continue; }
+
+        let crop = img.crop_imm(
+            cx_u - crop_half_w,
+            cy_u - crop_half_h,
+            crop_half_w * 2,
+            crop_half_h * 2,
+        );
+
+        let processed = field_read::preprocess_crop(&crop);
+        let tmp_path = PathBuf::from(format!("/tmp/_sign_rescue_{}.png", field_name));
+        if processed.save(&tmp_path).is_err() { continue; }
+
+        if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
+            if let Some((crop_val, crop_conf)) = field_read::extract_best_numeric(&crop_items) {
+                // If crop reads a negative value where we had positive, and the
+                // absolute values are very close, trust the crop's sign.
+                // Use the ORIGINAL magnitude (more reliable) with the CROP's sign.
+                if crop_val < 0.0 && current_val > 0.0 && (crop_val.abs() - current_val).abs() < 0.5 {
+                    let corrected = -current_val; // flip sign of original value
+                    labeled.get_mut(field_name).unwrap().value = corrected;
+                    // Keep original confidence
+                    labeled.get_mut(field_name).unwrap().raw_text =
+                        format!("[sign-rescue] {}", crop_items.iter()
+                            .map(|i| i.text.as_str()).collect::<Vec<_>>().join(" "));
+                }
+            }
+        }
         let _ = std::fs::remove_file(&tmp_path);
     }
 }
