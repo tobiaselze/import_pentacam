@@ -208,7 +208,9 @@ fn get_pdf_page_count(pdf_path: &Path) -> u32 {
 }
 
 fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
-    let out_prefix = "/tmp/_batch_pentacam_page";
+    // Use a page-specific prefix to avoid overwriting other pages
+    let out_prefix = format!("/tmp/_batch_pentacam_p{}", page);
+    // Clean only this page's files
     if let Ok(entries) = glob::glob(&format!("{}*.png", out_prefix)) {
         for entry in entries.flatten() {
             let _ = fs::remove_file(entry);
@@ -216,7 +218,7 @@ fn render_pdf_to_png(pdf_path: &Path, page: u32) -> PathBuf {
     }
     let _ = Command::new("pdftoppm")
         .args(["-r", "300", "-png", "-f", &page.to_string(), "-l", &page.to_string(),
-               pdf_path.to_str().unwrap(), out_prefix])
+               pdf_path.to_str().unwrap(), &out_prefix])
         .status();
     let mut pages: Vec<PathBuf> = glob::glob(&format!("{}*.png", out_prefix))
         .unwrap()
