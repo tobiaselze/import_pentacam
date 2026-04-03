@@ -21,6 +21,7 @@ candle-core = "0.9"
 [dev-dependencies]
 pentacam_types = { path = "../pentacam_types" }
 dicom_import = { path = "../dicom_import" }
+blob_import = { path = "../blob_import" }
 dicom-object = "0.9"
 dicom-core = "0.9"
 glob = "0.3"

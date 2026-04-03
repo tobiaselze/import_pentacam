@@ -2686,6 +2686,7 @@ dependencies = [
 name = "ocr_import"
 version = "0.1.0"
 dependencies = [
+ "blob_import",
  "candle-core",
  "dicom-core",
  "dicom-object",
