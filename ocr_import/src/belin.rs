@@ -138,6 +138,57 @@ pub fn extract(items: &[OcrItem]) -> HashMap<String, LocatedField> {
         }
     }
 
+    // Phase 1b: Validate Dt is right of Dp (catches OCR splitting "Dt:" into "D"+"t:")
+    if let (Some(dt), Some(dp)) = (result.get("Belin_Dt"), result.get("Belin_Dp")) {
+        if dt.cx < dp.cx + 50.0 {
+            result.remove("Belin_Dt");
+        }
+    }
+
+    // Phase 1c: D_final — rightmost numeric on the BAD-D row.
+    // The "D:" label is a single char that OCR often misses. Instead of relying
+    // on label matching, find the BAD-D row cy from any found BAD-D field,
+    // then take the rightmost value not already assigned to another field.
+    if !result.contains_key("Belin_D_final") {
+        let badd_cy = ["Belin_Df", "Belin_Db", "Belin_Dp", "Belin_Dt", "Belin_Da"]
+            .iter()
+            .filter_map(|&f| result.get(f))
+            .map(|loc| loc.cy)
+            .next();
+
+        if let Some(row_cy) = badd_cy {
+            let assigned_cx: Vec<f32> = ["Belin_Df","Belin_Db","Belin_Dp","Belin_Dt","Belin_Da"]
+                .iter()
+                .filter_map(|&f| result.get(f))
+                .map(|loc| loc.cx)
+                .collect();
+
+            let mut best: Option<(f64, &OcrItem)> = None;
+            let mut best_cx: f32 = 0.0;
+
+            for item in items {
+                if (item.cy - row_cy).abs() > 20.0 { continue; }
+                if assigned_cx.iter().any(|&acx| (item.cx - acx).abs() < 50.0) { continue; }
+                if let Some(val) = parse_belin_value(&item.text) {
+                    if item.cx > best_cx {
+                        best = Some((val, item));
+                        best_cx = item.cx;
+                    }
+                }
+            }
+
+            if let Some((val, item)) = best {
+                result.insert("Belin_D_final".to_string(), LocatedField {
+                    value: val,
+                    conf: item.confidence,
+                    cx: item.cx,
+                    cy: item.cy,
+                    raw_text: item.text.clone(),
+                });
+            }
+        }
+    }
+
     // Phase 2: Positional fallback using Belin archetype
     let fit = fit_affine(&result, ARCHETYPE_BELIN);
     let win_y: f32 = 35.0;
