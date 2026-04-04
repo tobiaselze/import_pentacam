@@ -49,11 +49,11 @@ fn belin_labels() -> Vec<BelinLabel> {
         BelinLabel { pattern: Regex::new(r"(?i)^Avg\s*:?$").unwrap(), field_name: "Belin_Prog_Avg", max_dx: 250.0, zone: BelinZone::DataTable },
         BelinLabel { pattern: Regex::new(r"(?i)^ART\s*max\s*:?$").unwrap(), field_name: "Belin_ARTmax", max_dx: 200.0, zone: BelinZone::DataTable },
         // BAD-D scores (bottom row)
-        BelinLabel { pattern: Regex::new(r"(?i)^Df\s*:?$").unwrap(), field_name: "Belin_Df", max_dx: 200.0, zone: BelinZone::BadD },
-        BelinLabel { pattern: Regex::new(r"(?i)^Db\s*:?$").unwrap(), field_name: "Belin_Db", max_dx: 200.0, zone: BelinZone::BadD },
-        BelinLabel { pattern: Regex::new(r"(?i)^Dp\s*:?$").unwrap(), field_name: "Belin_Dp", max_dx: 200.0, zone: BelinZone::BadD },
-        BelinLabel { pattern: Regex::new(r"(?i)^Dt\s*:?$").unwrap(), field_name: "Belin_Dt", max_dx: 200.0, zone: BelinZone::BadD },
-        BelinLabel { pattern: Regex::new(r"(?i)^Da\s*:?$").unwrap(), field_name: "Belin_Da", max_dx: 200.0, zone: BelinZone::BadD },
+        // Df, Db, Dp, Dt, Da are handled ONLY by Phase 2 positional fallback.
+        // Label matching for these is unreliable because OCR frequently confuses
+        // the similar labels (Df→Dt, Dt→D:, etc.), causing values to be assigned
+        // to the wrong fields.
+        // D_final uses the rightmost "D:" label to avoid confusion with misread Dt.
         BelinLabel { pattern: Regex::new(r"^D\s*:$").unwrap(), field_name: "Belin_D_final", max_dx: 200.0, zone: BelinZone::BadD },
     ]
 }
@@ -77,11 +77,23 @@ pub fn extract(items: &[OcrItem]) -> HashMap<String, LocatedField> {
             continue;
         }
 
-        // Find label
-        let label_match = items.iter().find(|item| {
-            label_def.pattern.is_match(item.text.trim())
-                && in_zone(item.cy, &label_def.zone)
-        });
+        // Find label.
+        // For D_final, use the RIGHTMOST matching "D:" label on the BAD-D row.
+        // OCR sometimes misreads "Dt:" or "Df:" as "D:", and the real D_final
+        // label is always the rightmost one.
+        let label_match = if label_def.field_name == "Belin_D_final" {
+            items.iter()
+                .filter(|item| {
+                    label_def.pattern.is_match(item.text.trim())
+                        && in_zone(item.cy, &label_def.zone)
+                })
+                .max_by(|a, b| a.cx.partial_cmp(&b.cx).unwrap())
+        } else {
+            items.iter().find(|item| {
+                label_def.pattern.is_match(item.text.trim())
+                    && in_zone(item.cy, &label_def.zone)
+            })
+        };
 
         let label_item = match label_match {
             Some(l) => l,
@@ -138,8 +150,44 @@ pub fn extract(items: &[OcrItem]) -> HashMap<String, LocatedField> {
         }
     }
 
-    // Phase 2: Positional fallback using Belin archetype
+    // Phase 1b: D_final Group B fallback.
+    // If D_final wasn't found by label matching and the affine fit suggests
+    // Group B (beta > 100), try a Group-B-specific position for D_final.
+    // Group B has D_final ~95px left of Group A (cx≈3123 vs 3218).
     let fit = fit_affine(&result, ARCHETYPE_BELIN);
+
+    if !result.contains_key("Belin_D_final") && fit.beta > 100.0 {
+        // Group B: D_final at cx≈3123 instead of 3218
+        let cy_ref = 2368.0_f32; // same cy as Group A
+        let cx_group_b = 3123.0_f32;
+        let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
+        let cx_pred = cx_group_b + fit.delta_cx as f32;
+        let win = 65.0_f32;
+
+        let best = items.iter()
+            .filter(|item| {
+                (item.cy - cy_pred).abs() <= 35.0
+                    && (item.cx - cx_pred).abs() <= win
+            })
+            .filter_map(|item| {
+                let val = parse_belin_value(&item.text)?;
+                let dist = ((item.cy - cy_pred).powi(2) + (item.cx - cx_pred).powi(2)).sqrt();
+                Some((dist, val, item))
+            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        if let Some((_, val, item)) = best {
+            result.insert("Belin_D_final".to_string(), LocatedField {
+                value: val,
+                conf: item.confidence,
+                cx: item.cx,
+                cy: item.cy,
+                raw_text: item.text.clone(),
+            });
+        }
+    }
+
+    // Phase 2: Positional fallback using Belin archetype
     let win_y: f32 = 35.0;
     let win_x: f32 = 65.0;
 
