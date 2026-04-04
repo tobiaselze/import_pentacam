@@ -187,6 +187,77 @@ pub fn extract(items: &[OcrItem]) -> HashMap<String, LocatedField> {
         }
     }
 
+    // Phase 1c: BAD-D row extraction anchored on D_final.
+    //
+    // Once D_final is found (by label or fallback), use its position to find
+    // the other 5 BAD-D values. Collect numeric OCR items on the same row,
+    // left of D_final, sort by cx, pick 5 rightmost with regular spacing.
+    //
+    // Sanity check: the 5 BAD-D values span ~1100-1300px total and are roughly
+    // evenly spaced (~200-270px apart). Reject candidates that don't fit this
+    // pattern (e.g., stray "+4" annotations from color bars).
+    if let Some(d_final) = result.get("Belin_D_final") {
+        let badd_names = ["Belin_Da", "Belin_Dt", "Belin_Dp", "Belin_Db", "Belin_Df"];
+        let d_cy = d_final.cy;
+        let d_cx = d_final.cx;
+
+        // Collect all numeric items on the BAD-D row, left of D_final.
+        // Filter: must be within 1400px left (Df is ~1300px from D),
+        // must not be a label (e.g., "Db:", "Dp:"), and value must be
+        // in plausible BAD-D range (-20 to 20).
+        let mut row_values: Vec<(f32, f64, &OcrItem)> = items.iter()
+            .filter(|item| {
+                (item.cy - d_cy).abs() <= 20.0
+                    && item.cx < d_cx - 100.0 // must be clearly left of D_final
+                    && item.cx > d_cx - 1400.0
+            })
+            .filter(|item| {
+                // Skip items that look like labels (contain ':' or letters other than e/E)
+                let t = item.text.trim();
+                !t.contains(':') && !t.chars().any(|c| c.is_ascii_alphabetic()
+                    && c != 'e' && c != 'E' && c != '-')
+            })
+            .filter_map(|item| {
+                let val = parse_belin_value(&item.text)?;
+                // BAD-D values are typically in range -20 to +20
+                if val.abs() > 25.0 { return None; }
+                Some((item.cx, val, item))
+            })
+            .collect();
+
+        // Sort by cx descending (rightmost first = Da, Dt, Dp, Db, Df)
+        row_values.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+
+        // Deduplicate: keep only one item per ~80px horizontal band
+        let mut deduped: Vec<(f32, f64, &OcrItem)> = Vec::new();
+        for entry in &row_values {
+            if deduped.last().map_or(true, |prev: &(f32, f64, &OcrItem)| (prev.0 - entry.0).abs() >= 80.0) {
+                deduped.push(*entry);
+            }
+        }
+
+        // Sanity check: we need exactly 5 values, and the total span should be
+        // between 900 and 1400px (Df to Da spans ~1000-1300px across devices).
+        if deduped.len() >= 5 {
+            let candidates = &deduped[..5];
+            let span = candidates[0].0 - candidates[4].0; // rightmost - leftmost
+            if span >= 900.0 && span <= 1400.0 {
+                for (i, (_, val, item)) in candidates.iter().enumerate() {
+                    let name = badd_names[i];
+                    if !result.contains_key(name) {
+                        result.insert(name.to_string(), LocatedField {
+                            value: *val,
+                            conf: item.confidence,
+                            cx: item.cx,
+                            cy: item.cy,
+                            raw_text: item.text.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // Phase 2: Positional fallback using Belin archetype
     let win_y: f32 = 35.0;
     let win_x: f32 = 65.0;
