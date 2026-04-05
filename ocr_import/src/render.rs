@@ -81,7 +81,7 @@ fn render_mupdf(pdf_bytes: &[u8], page: u32, dpi: u32) -> Result<PathBuf, String
     let target_h = h / 2;
     let downscaled = rgb_img.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3);
 
-    let out_path = PathBuf::from(format!("/tmp/_mupdf_render_p{}.png", page));
+    let out_path = super::temp_path(&format!("mupdf_render_p{}.png", page));
     downscaled.save(&out_path).map_err(|e| format!("Save PNG: {}", e))?;
 
     Ok(out_path)
@@ -101,10 +101,10 @@ fn page_count_mupdf(pdf_bytes: &[u8]) -> Result<u32, String> {
 // ---------------------------------------------------------------------------
 
 fn render_poppler(pdf_bytes: &[u8], page: u32, dpi: u32) -> Result<PathBuf, String> {
-    let pdf_path = PathBuf::from(format!("/tmp/_poppler_render_p{}.pdf", page));
+    let pdf_path = super::temp_path(&format!("poppler_render_p{}.pdf", page));
     fs::write(&pdf_path, pdf_bytes).map_err(|e| format!("Write PDF: {}", e))?;
 
-    let out_prefix = format!("/tmp/_poppler_render_p{}", page);
+    let out_prefix = super::temp_path(&format!("poppler_render_p{}", page)).to_str().unwrap().to_string();
     // Clean old files
     if let Ok(entries) = glob::glob(&format!("{}*.png", out_prefix)) {
         for entry in entries.flatten() {
@@ -135,7 +135,7 @@ fn render_poppler(pdf_bytes: &[u8], page: u32, dpi: u32) -> Result<PathBuf, Stri
 }
 
 fn page_count_poppler(pdf_bytes: &[u8]) -> Result<u32, String> {
-    let pdf_path = PathBuf::from("/tmp/_poppler_pagecount.pdf");
+    let pdf_path = super::temp_path("poppler_pagecount.pdf");
     fs::write(&pdf_path, pdf_bytes).map_err(|e| format!("Write PDF: {}", e))?;
 
     let output = Command::new("pdfinfo")

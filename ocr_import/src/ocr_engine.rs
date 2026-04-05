@@ -5,13 +5,15 @@ use oar_ocr_core::core::config::{OrtSessionConfig, OrtExecutionProvider};
 use once_cell::sync::OnceCell;
 use std::path::Path;
 
-/// A detected text region: text content, confidence, and centroid position.
+/// A detected text region: text content, confidence, centroid, and bounding box.
 #[derive(Debug, Clone)]
 pub struct OcrItem {
     pub text: String,
     pub confidence: f32,
     pub cx: f32,
     pub cy: f32,
+    /// Bounding box: (x_min, y_min, x_max, y_max)
+    pub bbox: (f32, f32, f32, f32),
 }
 
 /// Global OCR engine singleton.
@@ -55,11 +57,16 @@ fn results_to_items(results: &[OAROCRResult]) -> Vec<OcrItem> {
             if n == 0.0 { return None; }
             let cx = bb.points.iter().map(|p| p.x).sum::<f32>() / n;
             let cy = bb.points.iter().map(|p| p.y).sum::<f32>() / n;
+            let x_min = bb.points.iter().map(|p| p.x).fold(f32::MAX, f32::min);
+            let y_min = bb.points.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+            let x_max = bb.points.iter().map(|p| p.x).fold(f32::MIN, f32::max);
+            let y_max = bb.points.iter().map(|p| p.y).fold(f32::MIN, f32::max);
             Some(OcrItem {
                 text: text.trim().to_string(),
                 confidence: conf,
                 cx,
                 cy,
+                bbox: (x_min, y_min, x_max, y_max),
             })
         })
         .collect()

@@ -159,7 +159,7 @@ fn main() {
 
         for (page_img, page_num) in &input_file.pages {
             // Save to temp for OCR (TODO: use run_full_page_mem)
-            let tmp = PathBuf::from(format!("/tmp/_batch_p{}.png", page_num));
+            let tmp = ocr_import::temp_path(&format!("batch_p{}.png", page_num));
             image::DynamicImage::ImageRgb8(page_img.clone()).save(&tmp).unwrap();
             let result = ocr_import::process_page(&tmp, file_path, *page_num as usize);
             let _ = fs::remove_file(&tmp);
@@ -197,6 +197,9 @@ fn main() {
     csv.flush().unwrap();
     eprintln!("\nDone: {} files, {} pages, {} fields in {:.1}s\nOutput: {}",
         files.len(), total_pages, total_fields, start.elapsed().as_secs_f64(), output_csv.display());
+
+    // Clean up session temp directory
+    ocr_import::cleanup_temp();
 }
 
 fn format_meta(meta: &Option<DicomMeta>) -> String {

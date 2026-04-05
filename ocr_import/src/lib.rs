@@ -24,8 +24,29 @@ pub mod render;
 use image::GenericImageView;
 use pentacam_types::{PrintoutType, PrintoutResult, QaStatus};
 use field_locate::LocatedField;
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Per-process temp directory for all intermediate files (crops, renders, etc.).
+/// Created once on first use, cleaned up on process exit (unless debug mode).
+static TEMP_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    let dir = std::env::temp_dir().join(format!("pentacam_ocr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("Failed to create temp directory");
+    dir
+});
+
+/// Get a temp file path within the session temp directory.
+pub fn temp_path(name: &str) -> PathBuf {
+    TEMP_DIR.join(name)
+}
+
+/// Clean up the session temp directory.
+pub fn cleanup_temp() {
+    if let Err(e) = std::fs::remove_dir_all(TEMP_DIR.as_path()) {
+        eprintln!("Warning: failed to clean up temp dir {}: {}", TEMP_DIR.display(), e);
+    }
+}
 
 /// Minimum fields to consider extraction trustworthy.
 const MIN_LOCATED_FIELDS: usize = 25;
@@ -62,7 +83,9 @@ pub fn process_page_with_options(
     save: Option<&SaveOptions>,
 ) -> Option<PrintoutResult> {
     // Step 1: Full-page OCR
+    let t_start = std::time::Instant::now();
     let items = ocr_engine::run_full_page(img_path).ok()?;
+    let t_fullpage = t_start.elapsed();
 
     // Step 2: Detect printout type
     let printout_type = printout_detect::detect_printout_type(&items)?;
@@ -79,23 +102,29 @@ pub fn process_page_with_options(
     // Step 4: Post-processing corrections
     postprocess::apply_corrections(&mut labeled);
 
-    // Step 5: Crop-based re-reading for missing fields
-    // For fields in the archetype that weren't found by full-page OCR,
-    // crop the predicted position, preprocess, and re-OCR.
+    // Step 5: Routine re-crop of all found Belin fields.
+    // Full-page OCR misreads some values (e.g., "0.88mm" → "0.8mm", sign loss).
+    // Isolated crop OCR reads the same text correctly. Re-crop at the LOCATED
+    // position and re-read for ALL Belin fields. For other printout types, only
+    // re-crop missing/suspicious fields.
     let archetype = field_locate::archetype_for(&printout_type);
     let fit = field_locate::fit_affine(&labeled, archetype);
+
+    // NOTE: Routine re-crop of all Belin fields does NOT work.
+    // Tested both fixed-size (200x60) and tight-bbox crops — both cause massive
+    // regressions (48-121 regressions vs 2-3 improvements). PaddleOCR v5 via ORT
+    // performs WORSE on isolated crops than full pages — the model needs page context.
+    // Only selective re-crop works (suspicious values, sign rescue, missing fields).
+
+    // Step 5a: Crop-based re-reading for missing fields (archetype fallback)
     if fit.n_inliers >= 5 {
         crop_rescue_missing(&mut labeled, img_path, archetype, &fit);
     }
 
     // Step 5a2: Re-crop fields with suspicious values.
-    // Full-page OCR sometimes misreads values (e.g., green LCD "0.77" → "D.77" → 77).
-    // Isolated crop OCR reads the same text correctly. Re-crop at the LOCATED position
-    // (where full-page OCR found the text) and re-read.
     crop_rescue_suspicious(&mut labeled, img_path);
 
     // Step 5b: Crop-based re-reading for sign-ambiguous fields.
-    // Sign rescue: crop LEFT of the located value position to capture sign column.
     crop_rescue_signs(&mut labeled, img_path);
 
     // Step 5c: Post-processing again (crop rescue may have added raw values needing fixes)
@@ -124,6 +153,13 @@ pub fn process_page_with_options(
         }
     };
 
+    // Log timing
+    let t_total = t_start.elapsed();
+    if matches!(printout_type, PrintoutType::BelinAmbrosio) {
+        eprintln!("  timing: fullpage={:.1}s total={:.1}s ({} fields)",
+            t_fullpage.as_secs_f64(), t_total.as_secs_f64(), n_located);
+    }
+
     // Convert to output format
     // (after all extraction steps including crop rescue)
     let mut fields = HashMap::new();
@@ -141,6 +177,164 @@ pub fn process_page_with_options(
         confidences,
         qa_status,
     })
+}
+
+/// Routine re-crop and re-read of ALL found Belin fields.
+///
+/// Full-page OCR sometimes misreads values that isolated crop OCR reads
+/// correctly (e.g., "0.88mm" → "0.8mm" on full page, but "0.88mm" on crop).
+/// Re-crop at each field's LOCATED position and replace with crop value.
+///
+/// Logs how many fields were corrected vs confirmed.
+fn crop_reread_all(
+    labeled: &mut HashMap<String, LocatedField>,
+    img_path: &Path,
+) {
+    // Only re-read Belin data table + BAD-D fields (skip QS — categorical)
+    let reread_fields: Vec<(String, LocatedField)> = labeled.iter()
+        .filter(|(name, _)| name.starts_with("Belin_") && name.as_str() != "Belin_QS")
+        .map(|(name, loc)| (name.clone(), loc.clone()))
+        .collect();
+
+    if reread_fields.is_empty() { return; }
+
+    let img = match image::open(img_path) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let (iw, ih) = img.dimensions();
+    let mut reread_count = 0u32;
+    let mut changed_count = 0u32;
+
+    for (field_name, loc) in &reread_fields {
+        let crop_half_w: u32 = 100;
+        let crop_half_h: u32 = 30;
+        let cx_u = loc.cx as u32;
+        let cy_u = loc.cy as u32;
+        if cx_u < crop_half_w || cy_u < crop_half_h
+            || cx_u + crop_half_w >= iw || cy_u + crop_half_h >= ih
+        { continue; }
+
+        let crop = img.crop_imm(
+            cx_u - crop_half_w,
+            cy_u - crop_half_h,
+            crop_half_w * 2,
+            crop_half_h * 2,
+        );
+
+        // Use RAW crop (no preprocessing) — the text is already detected,
+        // we just need a cleaner isolated read. Preprocessing (3x upscale +
+        // morphological closing) can distort already-readable text.
+        let tmp_path = temp_path(&format!("crop_reread_{}.png", field_name));
+        if crop.save(&tmp_path).is_err() { continue; }
+
+        if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
+            if let Some((crop_val, crop_conf)) = field_read::extract_best_numeric(&crop_items) {
+                reread_count += 1;
+                if (crop_val - loc.value).abs() > 0.001 {
+                    changed_count += 1;
+                }
+                // Replace with crop value — isolated crop reads more accurately
+                labeled.insert(field_name.clone(), LocatedField {
+                    value: crop_val,
+                    conf: crop_conf,
+                    cx: loc.cx,
+                    cy: loc.cy,
+                    raw_text: format!("[reread] {}",
+                        crop_items.iter()
+                            .map(|i| i.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")),
+                });
+            }
+        }
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    if reread_count > 0 {
+        eprintln!("  crop-reread: {}/{} fields re-read, {} changed",
+            reread_count, reread_fields.len(), changed_count);
+    }
+}
+
+/// Re-crop all Belin fields using TIGHT bounding boxes from full-page OCR.
+///
+/// For each found Belin field, find the nearest OCR item's bounding box,
+/// crop tightly around it (+ small padding), and re-read. This avoids
+/// picking up neighboring values that fixed-size crops include.
+fn crop_reread_tight(
+    labeled: &mut HashMap<String, LocatedField>,
+    items: &[ocr_engine::OcrItem],
+    img_path: &Path,
+) {
+    let reread_fields: Vec<(String, LocatedField)> = labeled.iter()
+        .filter(|(name, _)| name.starts_with("Belin_") && name.as_str() != "Belin_QS")
+        .map(|(name, loc)| (name.clone(), loc.clone()))
+        .collect();
+
+    if reread_fields.is_empty() { return; }
+
+    let img = match image::open(img_path) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let (iw, ih) = img.dimensions();
+    let pad: u32 = 15;
+    let mut reread_count = 0u32;
+    let mut changed_count = 0u32;
+
+    for (field_name, loc) in &reread_fields {
+        // Find the nearest OCR item's bounding box to snap to
+        let mut best_dist = f32::MAX;
+        let mut best_bbox = (loc.cx - 75.0, loc.cy - 25.0, loc.cx + 75.0, loc.cy + 25.0);
+
+        for item in items {
+            let dist = (item.cx - loc.cx).abs() + (item.cy - loc.cy).abs();
+            if dist < best_dist && dist < 60.0 {
+                best_dist = dist;
+                best_bbox = item.bbox;
+            }
+        }
+
+        // Crop with padding
+        let x1 = (best_bbox.0 as u32).saturating_sub(pad);
+        let y1 = (best_bbox.1 as u32).saturating_sub(pad);
+        let x2 = ((best_bbox.2 as u32) + pad).min(iw);
+        let y2 = ((best_bbox.3 as u32) + pad).min(ih);
+
+        if x2 <= x1 || y2 <= y1 { continue; }
+
+        let crop = img.crop_imm(x1, y1, x2 - x1, y2 - y1);
+
+        let tmp_path = temp_path(&format!("crop_tight_{}.png", field_name));
+        if crop.save(&tmp_path).is_err() { continue; }
+
+        if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
+            if let Some((crop_val, crop_conf)) = field_read::extract_best_numeric(&crop_items) {
+                reread_count += 1;
+                if (crop_val - loc.value).abs() > 0.001 {
+                    changed_count += 1;
+                }
+                labeled.insert(field_name.clone(), LocatedField {
+                    value: crop_val,
+                    conf: crop_conf,
+                    cx: loc.cx,
+                    cy: loc.cy,
+                    raw_text: format!("[tight-reread] {}",
+                        crop_items.iter()
+                            .map(|i| i.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")),
+                });
+            }
+        }
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    if reread_count > 0 {
+        eprintln!("  tight-reread: {}/{} fields re-read, {} changed",
+            reread_count, reread_fields.len(), changed_count);
+    }
 }
 
 /// Crop-based re-reading for fields missing from full-page OCR.
@@ -200,7 +394,7 @@ fn crop_rescue_missing(
         let processed = field_read::preprocess_crop(&crop);
 
         // Save to temp file and run OCR
-        let tmp_path = PathBuf::from(format!("/tmp/_crop_rescue_{}.png", field_name));
+        let tmp_path = temp_path(&format!("crop_rescue_{}.png", field_name));
         if processed.save(&tmp_path).is_err() {
             continue;
         }
@@ -300,7 +494,7 @@ fn crop_rescue_suspicious(
         );
 
         let processed = field_read::preprocess_crop(&crop);
-        let tmp_path = PathBuf::from(format!("/tmp/_crop_suspicious_{}.png", field_name));
+        let tmp_path = temp_path(&format!("crop_suspicious_{}.png", field_name));
         if processed.save(&tmp_path).is_err() { continue; }
 
         if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
@@ -386,7 +580,7 @@ fn crop_rescue_signs(
         );
 
         let processed = field_read::preprocess_crop(&crop);
-        let tmp_path = PathBuf::from(format!("/tmp/_sign_rescue_{}.png", field_name));
+        let tmp_path = temp_path(&format!("sign_rescue_{}.png", field_name));
         if processed.save(&tmp_path).is_err() { continue; }
 
         if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
