@@ -88,6 +88,12 @@ pub fn process_page_with_options(
         crop_rescue_missing(&mut labeled, img_path, archetype, &fit);
     }
 
+    // Step 5a2: Re-crop fields with suspicious values.
+    // Full-page OCR sometimes misreads values (e.g., green LCD "0.77" → "D.77" → 77).
+    // Isolated crop OCR reads the same text correctly. Re-crop at the LOCATED position
+    // (where full-page OCR found the text) and re-read.
+    crop_rescue_suspicious(&mut labeled, img_path);
+
     // Step 5b: Crop-based re-reading for sign-ambiguous fields.
     // Sign rescue: crop LEFT of the located value position to capture sign column.
     crop_rescue_signs(&mut labeled, img_path);
@@ -214,6 +220,105 @@ fn crop_rescue_missing(
             }
         }
 
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+}
+
+/// Crop-based re-reading for fields with suspicious values.
+///
+/// Full-page OCR sometimes misreads small or colored text (e.g., green LCD
+/// digits: "0.77" → "D.77" → parsed as 77). Isolated crop OCR reads the same
+/// text correctly. For fields where the extracted value is outside the plausible
+/// range, re-crop at the LOCATED position and re-read.
+fn crop_rescue_suspicious(
+    labeled: &mut HashMap<String, LocatedField>,
+    img_path: &Path,
+) {
+    // Plausible ranges for Belin fields. Values outside these trigger re-crop.
+    // Conservative: only flag values that are clearly wrong, not borderline.
+    let suspicious: Vec<(&str, f64, f64)> = [
+        // Progression Index: typically 0-3, pathological up to ~15
+        ("Belin_Prog_Min", -20.0, 20.0),
+        ("Belin_Prog_Max", -20.0, 200.0),
+        ("Belin_Prog_Avg", -20.0, 20.0),
+        // Elevation thickness: typically -10 to 60 µm
+        ("Belin_F_Ele_Th", -30.0, 80.0),
+        ("Belin_B_Ele_Th", -30.0, 80.0),
+        // Keratometry: 30-70 D
+        ("Belin_K1", 30.0, 70.0),
+        ("Belin_K2", 30.0, 70.0),
+        ("Belin_KMax", 30.0, 90.0),
+        // Qval: -2 to +1
+        ("Belin_Qval", -3.0, 2.0),
+        // Pachymetry: 200-700 µm
+        ("Belin_PachyThin", 200.0, 750.0),
+        // Axis: 0-180 degrees
+        ("Belin_Axis", 0.0, 180.0),
+        // DistVertex: 0-3 mm
+        ("Belin_DistVertex", 0.0, 3.5),
+        // ARTmax: 0-900
+        ("Belin_ARTmax", 0.0, 900.0),
+    ].iter()
+        .filter(|&&(name, lo, hi)| {
+            if let Some(loc) = labeled.get(name) {
+                loc.value < lo || loc.value > hi
+            } else {
+                false
+            }
+        })
+        .map(|&(name, lo, hi)| (name, lo, hi))
+        .collect();
+
+    if suspicious.is_empty() { return; }
+
+    let img = match image::open(img_path) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let (iw, ih) = img.dimensions();
+
+    for (field_name, _lo, _hi) in &suspicious {
+        let loc = match labeled.get(*field_name) {
+            Some(l) => l.clone(),
+            None => continue,
+        };
+
+        // Crop at the LOCATED position (where full-page OCR found it)
+        let crop_half_w: u32 = 100;
+        let crop_half_h: u32 = 30;
+        let cx_u = loc.cx as u32;
+        let cy_u = loc.cy as u32;
+        if cx_u < crop_half_w || cy_u < crop_half_h
+            || cx_u + crop_half_w >= iw || cy_u + crop_half_h >= ih
+        { continue; }
+
+        let crop = img.crop_imm(
+            cx_u - crop_half_w,
+            cy_u - crop_half_h,
+            crop_half_w * 2,
+            crop_half_h * 2,
+        );
+
+        let processed = field_read::preprocess_crop(&crop);
+        let tmp_path = PathBuf::from(format!("/tmp/_crop_suspicious_{}.png", field_name));
+        if processed.save(&tmp_path).is_err() { continue; }
+
+        if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
+            if let Some((crop_val, crop_conf)) = field_read::extract_best_numeric(&crop_items) {
+                // Trust the crop value — it's from an isolated read at the known position
+                labeled.insert(field_name.to_string(), LocatedField {
+                    value: crop_val,
+                    conf: crop_conf,
+                    cx: loc.cx,
+                    cy: loc.cy,
+                    raw_text: format!("[suspicious-recrop] {}",
+                        crop_items.iter()
+                            .map(|i| i.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")),
+                });
+            }
+        }
         let _ = std::fs::remove_file(&tmp_path);
     }
 }
