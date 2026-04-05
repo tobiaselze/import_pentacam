@@ -339,6 +339,9 @@ fn crop_rescue_signs(
         "PachyVertex_x", "PachyVertex_y",
         "Thinnest_x", "Thinnest_y",
         "Qval_front", "Qval_back",
+        // Belin BAD-D and data table fields with frequent sign flips
+        "Belin_Df", "Belin_Db", "Belin_Dp", "Belin_Dt", "Belin_Da",
+        "Belin_D_final", "Belin_Qval", "Belin_F_Ele_Th",
     ];
 
     // Only re-crop fields that have a value (not missing) and are positive
