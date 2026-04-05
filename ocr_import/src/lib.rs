@@ -177,7 +177,7 @@ fn crop_rescue_missing(
         let crop_half_w: u32 = if is_axis { 180 } else { 100 };
         let crop_half_h: u32 = if is_axis { 40 } else { 30 };
         let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
-        let cx_pred = cx_ref + fit.delta_cx as f32;
+        let cx_pred = (fit.alpha_cx * cx_ref as f64 + fit.beta_cx) as f32;
 
         // Bounds check
         let cx_u = cx_pred as u32;

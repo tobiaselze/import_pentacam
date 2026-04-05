@@ -169,7 +169,7 @@ pub fn extract(items: &[OcrItem]) -> HashMap<String, LocatedField> {
         if field_name == "Belin_QS" { continue; }
 
         let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
-        let cx_pred = cx_ref + fit.delta_cx as f32;
+        let cx_pred = (fit.alpha_cx * cx_ref as f64 + fit.beta_cx) as f32;
 
         let best = items.iter()
             .filter(|item| {

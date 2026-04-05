@@ -160,6 +160,9 @@ pub struct AffineFit {
     pub alpha: f64,
     pub beta: f64,
     pub delta_cx: f64,
+    /// Horizontal affine: cx_actual = alpha_cx * cx_ref + beta_cx
+    pub alpha_cx: f64,
+    pub beta_cx: f64,
     pub resid_std: f64,
     pub n_inliers: usize,
     pub n_pairs: usize,
@@ -263,6 +266,7 @@ pub fn fit_affine(
     if n_pairs < 5 {
         return AffineFit {
             alpha: 1.0, beta: 0.0, delta_cx: 0.0,
+            alpha_cx: 1.0, beta_cx: 0.0,
             resid_std: 0.0, n_inliers: 0, n_pairs,
         };
     }
@@ -291,7 +295,7 @@ pub fn fit_affine(
         var.sqrt()
     };
 
-    // Horizontal shift: median of cx_actual - cx_ref
+    // Horizontal shift: median of cx_actual - cx_ref (backward compatible)
     let cx_deltas: Vec<f64> = labeled.iter()
         .filter_map(|(name, field)| {
             arch_map.get(name.as_str()).map(|&(_, cx_ref)| field.cx as f64 - cx_ref as f64)
@@ -299,8 +303,32 @@ pub fn fit_affine(
         .collect();
     let delta_cx = median(&cx_deltas);
 
+    // Horizontal affine: cx_actual = alpha_cx * cx_ref + beta_cx
+    let cx_pairs: Vec<(f64, f64)> = labeled.iter()
+        .filter_map(|(name, field)| {
+            arch_map.get(name.as_str()).map(|&(_, cx_ref)| (cx_ref as f64, field.cx as f64))
+        })
+        .collect();
+    let (alpha_cx, beta_cx) = if cx_pairs.len() >= 5 {
+        // Fit with outlier rejection
+        let (a, b) = polyfit1(&cx_pairs);
+        let cx_inliers: Vec<(f64, f64)> = cx_pairs.iter()
+            .filter(|&&(r, act)| (act - (a * r + b)).abs() < 40.0)
+            .copied()
+            .collect();
+        if cx_inliers.len() >= 5 {
+            polyfit1(&cx_inliers)
+        } else {
+            (a, b)
+        }
+    } else {
+        (1.0, delta_cx) // fallback: unit scale + median shift
+    };
+
     AffineFit {
-        alpha, beta, delta_cx, resid_std,
+        alpha, beta, delta_cx,
+        alpha_cx, beta_cx,
+        resid_std,
         n_inliers: inliers.len(),
         n_pairs,
     }

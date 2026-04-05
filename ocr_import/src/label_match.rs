@@ -233,7 +233,7 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
             continue;
         }
         let cy_pred = (fit.alpha * cy_ref as f64 + fit.beta) as f32;
-        let cx_pred = cx_ref + fit.delta_cx as f32;
+        let cx_pred = (fit.alpha_cx * cx_ref as f64 + fit.beta_cx) as f32;
 
         // Collect all tokens in the window, sorted left-to-right
         let mut candidates: Vec<&OcrItem> = items_sorted.iter()
