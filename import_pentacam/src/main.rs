@@ -10,6 +10,7 @@ mod eye_visit;
 pub mod field_map;
 pub mod logging;
 pub mod raw_csv;
+pub mod compact_csv;
 pub mod pipeline;
 
 use ocr_import::render::Renderer;
@@ -94,6 +95,17 @@ fn main() {
     let t0 = std::time::Instant::now();
     pipeline.process_input(&args.input);
     pipeline.finish();
+
+    // Generate compact CSV
+    let compact_path = pipeline.config.compact_csv_path.clone();
+    let raw_path = pipeline.config.raw_csv_path.clone();
+    if pipeline.total_rows > 0 {
+        eprintln!("\nGenerating compact CSV...");
+        match compact_csv::generate_compact(&raw_path, &compact_path) {
+            Ok(n) => eprintln!("Compact CSV: {} eye-visits → {}", n, compact_path.display()),
+            Err(e) => eprintln!("WARNING: Compact CSV generation failed: {}", e),
+        }
+    }
 
     eprintln!("Total time: {:.1}s", t0.elapsed().as_secs_f64());
 }
