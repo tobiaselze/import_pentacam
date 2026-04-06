@@ -219,7 +219,7 @@ fn select_best_value(
     col_index: &HashMap<String, usize>,
 ) -> Option<BestValue> {
     let field_idx = *col_index.get(field)?;
-    let conf_col = format!("{}_conf", field);
+    let conf_col = format!("{}_Paddle_conf", field);
     let conf_idx = col_index.get(conf_col.as_str()).copied();
     let type_idx = *col_index.get("printout_type")?;
 

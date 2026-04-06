@@ -89,7 +89,7 @@ impl RawCsvWriter {
         for &field in ALL_FIELDS {
             header.push(',');
             header.push_str(field);
-            header.push_str("_conf");
+            header.push_str("_Paddle_conf");
         }
         writeln!(writer, "{}", header)
     }

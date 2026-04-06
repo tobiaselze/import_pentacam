@@ -166,12 +166,76 @@ impl PentacamPipeline {
     // Input dispatch
     // -----------------------------------------------------------------------
 
-    /// Process any input: single file or directory (PACS mode).
+    /// Process any input: single file, file list (.txt), or directory (PACS mode).
     pub fn process_input(&mut self, input: &Path) {
         if input.is_dir() {
             self.process_pacs_directory(input);
+        } else if input.extension().and_then(|e| e.to_str()) == Some("txt") {
+            self.process_file_list(input);
         } else {
             self.process_single_file(input);
+        }
+    }
+
+    /// Process a file list (.txt with one path per line).
+    /// Tracks processed files for restart.
+    pub fn process_file_list(&mut self, list_path: &Path) {
+        let content = match fs::read_to_string(list_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("ERROR: Cannot read file list {}: {}", list_path.display(), e);
+                return;
+            }
+        };
+
+        let files: Vec<PathBuf> = content.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| PathBuf::from(l.trim()))
+            .filter(|p| p.exists())
+            .collect();
+
+        eprintln!("File list: {} files from {}", files.len(), list_path.display());
+
+        // Use processed_files tracking (separate from folder tracking)
+        let processed_files_path = self.config.output_dir.join("processed_files.csv");
+        let processed: HashSet<String> = if processed_files_path.exists() {
+            fs::read_to_string(&processed_files_path).unwrap_or_default()
+                .lines().filter(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string()).collect()
+        } else {
+            HashSet::new()
+        };
+
+        let mut processed_log = fs::OpenOptions::new()
+            .create(true).append(true)
+            .open(&processed_files_path)
+            .expect("Cannot open processed_files.csv");
+
+        let t_start = std::time::Instant::now();
+
+        for (i, file_path) in files.iter().enumerate() {
+            let file_str = file_path.display().to_string();
+            if processed.contains(&file_str) {
+                self.folders_skipped += 1; // reuse counter for "skipped"
+                continue;
+            }
+
+            self.process_single_file(file_path);
+            self.flush_pending_rows();
+            self.write_pending_manifests();
+
+            // Mark file as processed
+            let _ = writeln!(processed_log, "{}", file_str);
+            let _ = processed_log.flush();
+
+            if (i + 1) % 10 == 0 || i + 1 == files.len() {
+                eprintln!(
+                    "[{}/{}] {:.1}s, {} rows (skipped {})",
+                    i + 1, files.len(),
+                    t_start.elapsed().as_secs_f64(),
+                    self.total_rows, self.folders_skipped,
+                );
+            }
         }
     }
 
