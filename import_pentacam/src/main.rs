@@ -7,6 +7,8 @@ use pentacam_types::{EyeVisit, EyeVisitKey};
 
 mod eye_visit;
 pub mod field_map;
+pub mod raw_csv;
+pub mod logging;
 
 #[derive(Parser)]
 #[command(name = "import_pentacam")]
