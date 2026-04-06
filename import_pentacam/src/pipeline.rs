@@ -109,6 +109,8 @@ pub struct PentacamPipeline {
     error_log: ErrorLog,
     // Per-scan source tracking: scan_hash → [(filename, page, printout_type, data_source)]
     scan_sources: HashMap<String, Vec<(String, u32, String, String)>>,
+    // Buffered rows for current folder (written atomically after images are saved)
+    pending_rows: Vec<RawRow>,
     // Counters
     pub files_processed: u32,
     pub folders_processed: u32,
@@ -147,6 +149,7 @@ impl PentacamPipeline {
             processed_log,
             error_log,
             scan_sources: HashMap::new(),
+            pending_rows: Vec::new(),
             files_processed: 0,
             folders_processed: 0,
             folders_skipped: 0,
@@ -253,13 +256,11 @@ impl PentacamPipeline {
             self.process_dicom_with_folder(dcm_path, &folder_rel);
         }
 
-        // Write source manifests for all scans in this folder
-        self.write_pending_manifests();
-
-        // Flush after each folder for interruption safety
-        if let Err(e) = self.raw_csv.flush() {
-            eprintln!("  WARNING: CSV flush failed: {}", e);
-        }
+        // Atomic commit: images first, then manifests, then CSV, then mark processed
+        // If we crash between any step, the folder is NOT marked processed and will
+        // be fully re-done on restart.
+        self.write_pending_manifests();  // 1. Source manifests to image dirs
+        self.flush_pending_rows();       // 2. Buffered CSV rows + flush
         self.error_log.flush();
     }
 
@@ -554,10 +555,21 @@ impl PentacamPipeline {
                 ));
         }
 
-        if let Err(e) = self.raw_csv.write_row(&row) {
-            eprintln!("  WARNING: Failed to write CSV row: {}", e);
+        // Buffer the row — written to CSV after images are complete
+        self.pending_rows.push(row);
+    }
+
+    /// Write all buffered rows to the raw CSV. Called after images are saved.
+    fn flush_pending_rows(&mut self) {
+        for row in self.pending_rows.drain(..) {
+            if let Err(e) = self.raw_csv.write_row(&row) {
+                eprintln!("  WARNING: Failed to write CSV row: {}", e);
+            }
+            self.total_rows += 1;
         }
-        self.total_rows += 1;
+        if let Err(e) = self.raw_csv.flush() {
+            eprintln!("  WARNING: CSV flush failed: {}", e);
+        }
     }
 
     /// Get or create the image directory for a scan hash.
@@ -664,7 +676,7 @@ impl PentacamPipeline {
     /// Print final summary and flush all logs.
     pub fn finish(&mut self) {
         self.write_pending_manifests();
-        let _ = self.raw_csv.flush();
+        self.flush_pending_rows();
         self.error_log.flush();
         self.error_log.print_summary();
         eprintln!(
