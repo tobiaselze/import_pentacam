@@ -197,21 +197,43 @@ impl PentacamPipeline {
     // PACS directory mode
     // -----------------------------------------------------------------------
 
-    /// Recursively scan a PACS directory, processing each subfolder.
+    /// Recursively scan a PACS directory, processing each subfolder incrementally.
+    /// Skips already-processed folders without pre-scanning the entire tree.
     pub fn process_pacs_directory(&mut self, root: &Path) {
         eprintln!("Scanning PACS directory: {}", root.display());
 
-        // Find all directories containing Pentacam DICOM files
-        let folders = discover_pentacam_folders(root);
-        eprintln!("Found {} folders with Pentacam files", folders.len());
+        let t_start = std::time::Instant::now();
 
-        for (i, folder) in folders.iter().enumerate() {
+        // Walk incrementally — check each directory as we encounter it
+        for entry in walkdir::WalkDir::new(root)
+            .sort_by_file_name() // deterministic order, subfolders before parents
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_dir() { continue; }
+
+            let folder = entry.path();
             let folder_str = folder.display().to_string();
 
+            // Skip already processed
             if self.processed_log.is_processed(&folder_str) {
                 self.folders_skipped += 1;
                 continue;
             }
+
+            // Check if this directory has Pentacam DICOM files (without recursing)
+            let has_pentacam = fs::read_dir(folder)
+                .into_iter()
+                .flat_map(|rd| rd.into_iter())
+                .filter_map(|e| e.ok())
+                .any(|e| {
+                    e.path().extension().and_then(|ext| ext.to_str()) == Some("dcm")
+                        && e.file_name().to_str()
+                            .map(|n| n.starts_with(PENTACAM_PREFIX))
+                            .unwrap_or(false)
+                });
+
+            if !has_pentacam { continue; }
 
             let t0 = std::time::Instant::now();
             self.process_pacs_folder(folder);
@@ -221,15 +243,20 @@ impl PentacamPipeline {
             }
             self.folders_processed += 1;
 
-            if (i + 1) % 10 == 0 || i + 1 == folders.len() {
+            if self.folders_processed % 10 == 0 {
                 eprintln!(
-                    "[{}/{}] {:.1}s, {} files, {} rows (skipped {})",
-                    i + 1, folders.len(),
-                    t0.elapsed().as_secs_f64(),
+                    "[{}] {:.1}s total, {} files, {} rows (skipped {})",
+                    self.folders_processed,
+                    t_start.elapsed().as_secs_f64(),
                     self.files_processed, self.total_rows, self.folders_skipped,
                 );
             }
         }
+
+        eprintln!(
+            "Scan complete: {} folders processed, {} skipped",
+            self.folders_processed, self.folders_skipped,
+        );
     }
 
     /// Process all Pentacam DICOM files in a single folder.
@@ -688,32 +715,6 @@ impl PentacamPipeline {
         // Clean up temp directory
         ocr_import::cleanup_temp();
     }
-}
-
-// ---------------------------------------------------------------------------
-// PACS folder discovery
-// ---------------------------------------------------------------------------
-
-/// Find all directories containing Pentacam DICOM files.
-fn discover_pentacam_folders(root: &Path) -> Vec<PathBuf> {
-    let mut folders = HashSet::new();
-
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("dcm") {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with(PENTACAM_PREFIX) {
-                    if let Some(parent) = path.parent() {
-                        folders.insert(parent.to_path_buf());
-                    }
-                }
-            }
-        }
-    }
-
-    let mut sorted: Vec<PathBuf> = folders.into_iter().collect();
-    sorted.sort();
-    sorted
 }
 
 /// Parse exam date + time into epoch seconds (best effort).
