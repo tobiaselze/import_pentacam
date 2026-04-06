@@ -29,7 +29,7 @@ struct BestValue {
 
 /// Generate the compact CSV from the raw CSV.
 /// Groups by scan_hash, picks best value per field, cross-validates SR vs OCR.
-pub fn generate_compact(raw_csv_path: &Path, output_path: &Path) -> Result<u32, String> {
+pub fn generate_compact(raw_csv_path: &Path, output_path: &Path, omit_patient_name: bool) -> Result<u32, String> {
     let file = File::open(raw_csv_path)
         .map_err(|e| format!("Open raw CSV: {}", e))?;
     let reader = BufReader::new(file);
@@ -62,10 +62,17 @@ pub fn generate_compact(raw_csv_path: &Path, output_path: &Path) -> Result<u32, 
     let mut writer = BufWriter::new(out);
 
     // Header
-    let mut header = "patient_id,patient_name,dob,sex,eye,exam_date,exam_time,\
-        timeoftest,timeoftestEpoch,\
-        device_serial,software_version,scan_hash,n_source_rows,source_types"
-        .to_string();
+    let mut header = if omit_patient_name {
+        "id,birthdate,male,righteye,exam_date,exam_time,\
+            timeoftest,timeoftestEpoch,\
+            device_serial,software_version,scan_hash,n_source_rows,source_types"
+            .to_string()
+    } else {
+        "id,PatientName,birthdate,male,righteye,exam_date,exam_time,\
+            timeoftest,timeoftestEpoch,\
+            device_serial,software_version,scan_hash,n_source_rows,source_types"
+            .to_string()
+    };
     for &field in ALL_FIELDS {
         header.push_str(&format!(",{},{}_source,{}_conf,{}_reliability,{}_flag",
             field, field, field, field, field));
@@ -99,22 +106,50 @@ pub fn generate_compact(raw_csv_path: &Path, output_path: &Path) -> Result<u32, 
         let exam_time = get("exam_time");
         let (timeoftest, epoch) = format_timeoftest(&exam_date, &exam_time);
 
-        let mut line = format!("{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"",
-            csv_escape(&get("patient_id")),
-            csv_escape(&get("patient_name")),
-            csv_escape(&get("dob")),
-            csv_escape(&get("sex")),
-            csv_escape(&get("eye")),
-            csv_escape(&exam_date),
-            csv_escape(&exam_time),
-            csv_escape(&timeoftest),
-            epoch.map(|e| e.to_string()).unwrap_or_default(),
-            csv_escape(&get("device_serial")),
-            csv_escape(&get("software_version")),
-            csv_escape(hash),
-            rows.len(),
-            source_types.join("|"),
-        );
+        // Convert to Spectralis-compatible format
+        let sex_raw = get("sex").to_uppercase();
+        let male = match sex_raw.as_str() {
+            "M" => "1", "F" => "0", _ => ""
+        };
+        let eye_raw = get("eye").to_uppercase();
+        let righteye = match eye_raw.as_str() {
+            "OD" | "R" => "1", "OS" | "L" => "0", _ => ""
+        };
+
+        let mut line = if omit_patient_name {
+            format!("{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"",
+                csv_escape(&get("patient_id")),
+                csv_escape(&get("dob")),
+                male,
+                righteye,
+                csv_escape(&exam_date),
+                csv_escape(&exam_time),
+                csv_escape(&timeoftest),
+                epoch.map(|e| e.to_string()).unwrap_or_default(),
+                csv_escape(&get("device_serial")),
+                csv_escape(&get("software_version")),
+                csv_escape(hash),
+                rows.len(),
+                source_types.join("|"),
+            )
+        } else {
+            format!("{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"",
+                csv_escape(&get("patient_id")),
+                csv_escape(&get("patient_name")),
+                csv_escape(&get("dob")),
+                male,
+                righteye,
+                csv_escape(&exam_date),
+                csv_escape(&exam_time),
+                csv_escape(&timeoftest),
+                epoch.map(|e| e.to_string()).unwrap_or_default(),
+                csv_escape(&get("device_serial")),
+                csv_escape(&get("software_version")),
+                csv_escape(hash),
+                rows.len(),
+                source_types.join("|"),
+            )
+        };
 
         // For each field, find best value
         for &field in ALL_FIELDS {
