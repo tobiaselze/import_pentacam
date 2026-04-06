@@ -674,10 +674,13 @@ impl PentacamPipeline {
     }
 
     /// Get or create the image directory for a scan hash.
-    fn image_dir(&self, scan_hash: &str) -> PathBuf {
+    /// Returns (path, is_new) — if the directory already existed, callers
+    /// should skip saving images (first run wins).
+    fn image_dir(&self, scan_hash: &str) -> (PathBuf, bool) {
         let dir = self.config.output_dir.join("images").join(scan_hash);
+        let is_new = !dir.exists();
         let _ = fs::create_dir_all(&dir);
-        dir
+        (dir, is_new)
     }
 
     /// Save a rendered page image (de-identified) to the scan's image directory.
@@ -689,7 +692,8 @@ impl PentacamPipeline {
         img_path: &Path,
     ) {
         if !self.config.save_pages || scan_hash.is_empty() { return; }
-        let dir = self.image_dir(scan_hash);
+        let (dir, is_new) = self.image_dir(scan_hash);
+        if !is_new { return; } // first run wins
         // Use a short printout type name for the filename
         let type_short = printout_type.replace("FourMaps", "4maps_")
             .replace("Refractive", "refr")
@@ -710,7 +714,8 @@ impl PentacamPipeline {
         maps: &ocr_import::extract_maps::ExtractedMaps,
     ) {
         if !self.config.save_maps || scan_hash.is_empty() { return; }
-        let dir = self.image_dir(scan_hash);
+        let (dir, is_new) = self.image_dir(scan_hash);
+        if !is_new { return; } // first run wins
         for (name, img) in &maps.maps {
             let dst = dir.join(format!("map_{}.png", name));
             let _ = img.save(&dst);
@@ -775,6 +780,8 @@ impl PentacamPipeline {
         for (hash, entries) in self.scan_sources.drain() {
             if entries.is_empty() { continue; }
             let dir = self.config.output_dir.join("images").join(&hash);
+            // Skip if manifest already exists (first run wins)
+            if dir.join("sources.csv").exists() { continue; }
             let _ = fs::create_dir_all(&dir);
             if let Err(e) = write_source_manifest(&dir, &entries) {
                 eprintln!("  WARNING: Failed to write source manifest: {}", e);
