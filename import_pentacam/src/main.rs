@@ -6,6 +6,7 @@ use walkdir::WalkDir;
 use pentacam_types::{EyeVisit, EyeVisitKey};
 
 mod eye_visit;
+pub mod field_map;
 
 #[derive(Parser)]
 #[command(name = "import_pentacam")]
