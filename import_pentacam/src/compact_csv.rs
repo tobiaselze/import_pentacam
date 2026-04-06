@@ -63,6 +63,7 @@ pub fn generate_compact(raw_csv_path: &Path, output_path: &Path) -> Result<u32, 
 
     // Header
     let mut header = "patient_id,patient_name,dob,sex,eye,exam_date,exam_time,\
+        timeoftest,timeoftestEpoch,\
         device_serial,software_version,scan_hash,n_source_rows,source_types"
         .to_string();
     for &field in ALL_FIELDS {
@@ -93,14 +94,21 @@ pub fn generate_compact(raw_csv_path: &Path, output_path: &Path) -> Result<u32, 
             .into_iter()
             .collect();
 
-        let mut line = format!("{},{},{},{},{},{},{},{},{},{},{},\"{}\"",
+        // Compute timeoftest (yymmddHHMMSS) and timeoftestEpoch
+        let exam_date = get("exam_date");
+        let exam_time = get("exam_time");
+        let (timeoftest, epoch) = format_timeoftest(&exam_date, &exam_time);
+
+        let mut line = format!("{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"",
             csv_escape(&get("patient_id")),
             csv_escape(&get("patient_name")),
             csv_escape(&get("dob")),
             csv_escape(&get("sex")),
             csv_escape(&get("eye")),
-            csv_escape(&get("exam_date")),
-            csv_escape(&get("exam_time")),
+            csv_escape(&exam_date),
+            csv_escape(&exam_time),
+            csv_escape(&timeoftest),
+            epoch.map(|e| e.to_string()).unwrap_or_default(),
             csv_escape(&get("device_serial")),
             csv_escape(&get("software_version")),
             csv_escape(hash),
@@ -268,6 +276,35 @@ fn parse_csv_line(line: &str) -> Vec<String> {
     }
     fields.push(current);
     fields
+}
+
+/// Format exam date + time into timeoftest (yymmddHHMMSS) and Unix epoch.
+/// Input: exam_date = "YYYYMMDD", exam_time = "HHMMSS" or "HHMMSS.fff"
+/// Output: ("yymmddHHMMSS", Some(epoch_seconds)) or ("", None) on parse failure.
+fn format_timeoftest(exam_date: &str, exam_time: &str) -> (String, Option<i64>) {
+    if exam_date.len() < 8 { return (String::new(), None); }
+
+    // yymmddHHMMSS — take last 2 digits of year
+    let yy = &exam_date[2..4];
+    let mmdd = &exam_date[4..8];
+    let time_part = if exam_time.len() >= 6 { &exam_time[0..6] } else { "000000" };
+    let timeoftest = format!("{}{}{}", yy, mmdd, time_part);
+
+    // Unix epoch
+    let y: i32 = exam_date[0..4].parse().unwrap_or(2000);
+    let m: u32 = exam_date[4..6].parse().unwrap_or(1);
+    let d: u32 = exam_date[6..8].parse().unwrap_or(1);
+    let h: u32 = if exam_time.len() >= 2 { exam_time[0..2].parse().unwrap_or(0) } else { 0 };
+    let min: u32 = if exam_time.len() >= 4 { exam_time[2..4].parse().unwrap_or(0) } else { 0 };
+    let s: u32 = if exam_time.len() >= 6 { exam_time[4..6].parse().unwrap_or(0) } else { 0 };
+
+    // Use chrono for proper epoch calculation
+    use chrono::{NaiveDate, NaiveTime, NaiveDateTime};
+    let epoch = NaiveDate::from_ymd_opt(y, m, d)
+        .and_then(|date| NaiveTime::from_hms_opt(h, min, s).map(|time| NaiveDateTime::new(date, time)))
+        .map(|dt| dt.and_utc().timestamp());
+
+    (timeoftest, epoch)
 }
 
 fn csv_escape(s: &str) -> String {
