@@ -284,25 +284,35 @@ fn crop_reread_tight(
     let mut changed_count = 0u32;
 
     for (field_name, loc) in &reread_fields {
-        // Find the nearest OCR item's bounding box to snap to
+        // Find the nearest NUMERIC OCR item's bounding box to snap to.
+        // Skip labels (contain ':' or start with letters) to avoid snapping
+        // to "K1:" instead of "36.8".
         let mut best_dist = f32::MAX;
         let mut best_bbox = (loc.cx - 75.0, loc.cy - 25.0, loc.cx + 75.0, loc.cy + 25.0);
 
         for item in items {
+            // Skip items that look like labels
+            let t = item.text.trim();
+            if t.contains(':') { continue; }
+            let first = t.chars().next().unwrap_or('x');
+            if first.is_ascii_alphabetic() && first != 'e' && first != 'E' { continue; }
+
             let dist = (item.cx - loc.cx).abs() + (item.cy - loc.cy).abs();
-            if dist < best_dist && dist < 60.0 {
+            if dist < best_dist && dist < 40.0 {
                 best_dist = dist;
                 best_bbox = item.bbox;
             }
         }
 
-        // Crop with padding
+        // Crop with padding, enforce minimum size
         let x1 = (best_bbox.0 as u32).saturating_sub(pad);
         let y1 = (best_bbox.1 as u32).saturating_sub(pad);
         let x2 = ((best_bbox.2 as u32) + pad).min(iw);
         let y2 = ((best_bbox.3 as u32) + pad).min(ih);
 
         if x2 <= x1 || y2 <= y1 { continue; }
+        // Minimum crop size — too small crops fail OCR
+        if (x2 - x1) < 30 || (y2 - y1) < 15 { continue; }
 
         let crop = img.crop_imm(x1, y1, x2 - x1, y2 - y1);
 
@@ -311,21 +321,33 @@ fn crop_reread_tight(
 
         if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
             if let Some((crop_val, crop_conf)) = field_read::extract_best_numeric(&crop_items) {
-                reread_count += 1;
-                if (crop_val - loc.value).abs() > 0.001 {
-                    changed_count += 1;
+                // Only accept crop value if it's plausibly the same field:
+                // - Same sign and similar magnitude (allows small corrections)
+                // - OR crop fixes a sign (abs values match)
+                // - OR crop fixes a decimal shift (ratio ~100x)
+                // Reject if completely different (snapped to wrong item)
+                let dominated = loc.value.abs() < 0.001; // original is ~0
+                let same_ballpark = (crop_val - loc.value).abs() < loc.value.abs().max(1.0) * 0.5;
+                let sign_fix = (crop_val.abs() - loc.value.abs()).abs() < 0.06 && crop_val * loc.value < 0.0;
+                let decimal_fix = loc.value.abs() > 1.0 && (crop_val * 100.0 - loc.value).abs() < 1.0;
+
+                if same_ballpark || sign_fix || decimal_fix || dominated {
+                    reread_count += 1;
+                    if (crop_val - loc.value).abs() > 0.001 {
+                        changed_count += 1;
+                    }
+                    labeled.insert(field_name.clone(), LocatedField {
+                        value: crop_val,
+                        conf: crop_conf,
+                        cx: loc.cx,
+                        cy: loc.cy,
+                        raw_text: format!("[tight-reread] {}",
+                            crop_items.iter()
+                                .map(|i| i.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")),
+                    });
                 }
-                labeled.insert(field_name.clone(), LocatedField {
-                    value: crop_val,
-                    conf: crop_conf,
-                    cx: loc.cx,
-                    cy: loc.cy,
-                    raw_text: format!("[tight-reread] {}",
-                        crop_items.iter()
-                            .map(|i| i.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ")),
-                });
             }
         }
         let _ = std::fs::remove_file(&tmp_path);
@@ -393,24 +415,50 @@ fn crop_rescue_missing(
         // Preprocess: 3x upscale + fill hollow digits
         let processed = field_read::preprocess_crop(&crop);
 
-        // Save to temp file and run OCR
+        // Save to temp file and run OCR.
+        // Try preprocessed first, then raw if preprocessing finds nothing
+        // (preprocessing can destroy text on colored backgrounds like yellow/red).
         let tmp_path = temp_path(&format!("crop_rescue_{}.png", field_name));
-        if processed.save(&tmp_path).is_err() {
-            continue;
+        let mut found = false;
+
+        // Try 1: preprocessed crop
+        if processed.save(&tmp_path).is_ok() {
+            if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
+                if let Some((val, conf)) = field_read::extract_best_numeric(&crop_items) {
+                    labeled.insert(field_name.to_string(), LocatedField {
+                        value: val,
+                        conf,
+                        cx: cx_pred,
+                        cy: cy_pred,
+                        raw_text: format!("[crop-rescue] {}",
+                            crop_items.iter()
+                                .map(|i| i.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")),
+                    });
+                    found = true;
+                }
+            }
         }
-        if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
-            if let Some((val, conf)) = field_read::extract_best_numeric(&crop_items) {
-                labeled.insert(field_name.to_string(), LocatedField {
-                    value: val,
-                    conf,
-                    cx: cx_pred,
-                    cy: cy_pred,
-                    raw_text: format!("[crop-rescue] {}",
-                        crop_items.iter()
-                            .map(|i| i.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ")),
-                });
+
+        // Try 2: raw crop (no preprocessing) — handles colored backgrounds
+        if !found {
+            if crop.save(&tmp_path).is_ok() {
+                if let Ok(crop_items) = ocr_engine::run_full_page(&tmp_path) {
+                    if let Some((val, conf)) = field_read::extract_best_numeric(&crop_items) {
+                        labeled.insert(field_name.to_string(), LocatedField {
+                            value: val,
+                            conf,
+                            cx: cx_pred,
+                            cy: cy_pred,
+                            raw_text: format!("[crop-rescue-raw] {}",
+                                crop_items.iter()
+                                    .map(|i| i.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")),
+                        });
+                    }
+                }
             }
         }
 
