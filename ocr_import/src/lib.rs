@@ -84,11 +84,24 @@ pub fn process_page_with_options(
 ) -> Option<PrintoutResult> {
     // Step 1: Full-page OCR
     let t_start = std::time::Instant::now();
-    let items = ocr_engine::run_full_page(img_path).ok()?;
+    let items = match ocr_engine::run_full_page(img_path) {
+        Ok(items) => items,
+        Err(e) => {
+            eprintln!("  WARNING: OCR failed on {}: {}", img_path.display(), e);
+            return None;
+        }
+    };
     let t_fullpage = t_start.elapsed();
 
     // Step 2: Detect printout type
-    let printout_type = printout_detect::detect_printout_type(&items)?;
+    let printout_type = match printout_detect::detect_printout_type(&items) {
+        Some(pt) => pt,
+        None => {
+            eprintln!("  WARNING: printout type not recognized on {} ({} OCR items)",
+                img_path.display(), items.len());
+            return None;
+        }
+    };
 
     // Step 3: Extract fields based on printout type
     let mut labeled = match &printout_type {
