@@ -2026,6 +2026,7 @@ dependencies = [
  "clap",
  "csv",
  "dicom_import",
+ "image",
  "ocr_import",
  "pentacam_types",
  "serde",

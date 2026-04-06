@@ -20,6 +20,7 @@ pub mod belin;
 pub mod demographics;
 pub mod postprocess;
 pub mod render;
+pub mod extract_maps;
 
 use image::GenericImageView;
 use pentacam_types::{PrintoutType, PrintoutResult, QaStatus};

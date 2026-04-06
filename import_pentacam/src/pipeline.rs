@@ -107,6 +107,8 @@ pub struct PentacamPipeline {
     raw_csv: RawCsvWriter,
     processed_log: ProcessedLog,
     error_log: ErrorLog,
+    // Per-scan source tracking: scan_hash → [(filename, page, printout_type, data_source)]
+    scan_sources: HashMap<String, Vec<(String, u32, String, String)>>,
     // Counters
     pub files_processed: u32,
     pub folders_processed: u32,
@@ -144,6 +146,7 @@ impl PentacamPipeline {
             raw_csv,
             processed_log,
             error_log,
+            scan_sources: HashMap::new(),
             files_processed: 0,
             folders_processed: 0,
             folders_skipped: 0,
@@ -250,6 +253,9 @@ impl PentacamPipeline {
             self.process_dicom_with_folder(dcm_path, &folder_rel);
         }
 
+        // Write source manifests for all scans in this folder
+        self.write_pending_manifests();
+
         // Flush after each folder for interruption safety
         if let Err(e) = self.raw_csv.flush() {
             eprintln!("  WARNING: CSV flush failed: {}", e);
@@ -345,6 +351,35 @@ impl PentacamPipeline {
                     for page in 1..=n_pages {
                         match ocr_import::render::render_pdf_page(pdf, page, 300, self.config.renderer) {
                             Ok(png_path) => {
+                                // Run OCR
+                                let ocr_items = ocr_import::ocr_engine::run_full_page(&png_path).ok();
+
+                                if let Some(ref items) = ocr_items {
+                                    // Detect printout type
+                                    if let Some(pt) = ocr_import::printout_detect::detect_printout_type(items) {
+                                        let pt_str = format!("{:?}", pt);
+
+                                        // Save rendered page image
+                                        self.save_page_image(&scan_hash, page, &pt_str, &png_path);
+
+                                        // Extract maps
+                                        match image::open(&png_path) {
+                                            Ok(page_img) => {
+                                                let maps = ocr_import::extract_maps::extract_maps(
+                                                    &page_img, items, &pt_str,
+                                                );
+                                                if !maps.maps.is_empty() {
+                                                    self.save_maps(&scan_hash, &maps);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("    WARNING: failed to open page image for map extraction: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Full pipeline processing (field extraction etc.)
                                 if let Some(result) = ocr_import::process_page(
                                     &png_path, path, page as usize,
                                 ) {
@@ -504,10 +539,69 @@ impl PentacamPipeline {
     // -----------------------------------------------------------------------
 
     fn write_row(&mut self, row: RawRow) {
+        // Track source for manifest
+        if !row.scan_hash.is_empty() {
+            self.scan_sources
+                .entry(row.scan_hash.clone())
+                .or_default()
+                .push((
+                    row.source_file.clone(),
+                    row.page_number,
+                    row.printout_type.clone(),
+                    if row.printout_type == "SR" { "DICOM_SR".to_string() }
+                    else if row.printout_type == "SPR" { "SPR_blob".to_string() }
+                    else { "OCR".to_string() },
+                ));
+        }
+
         if let Err(e) = self.raw_csv.write_row(&row) {
             eprintln!("  WARNING: Failed to write CSV row: {}", e);
         }
         self.total_rows += 1;
+    }
+
+    /// Get or create the image directory for a scan hash.
+    fn image_dir(&self, scan_hash: &str) -> PathBuf {
+        let dir = self.config.output_dir.join("images").join(scan_hash);
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// Save a rendered page image (de-identified) to the scan's image directory.
+    fn save_page_image(
+        &self,
+        scan_hash: &str,
+        page_num: u32,
+        printout_type: &str,
+        img_path: &Path,
+    ) {
+        if !self.config.save_images || scan_hash.is_empty() { return; }
+        let dir = self.image_dir(scan_hash);
+        // Use a short printout type name for the filename
+        let type_short = printout_type.replace("FourMaps", "4maps_")
+            .replace("Refractive", "refr")
+            .replace("Selectable", "sel")
+            .replace("TopometricKcStaging", "topo")
+            .replace("BelinAmbrosio", "belin")
+            .replace("BelinAbcdProgression", "belin_abcd")
+            .replace(' ', "_")
+            .to_lowercase();
+        let dst = dir.join(format!("page{}_{}.png", page_num, type_short));
+        let _ = fs::copy(img_path, &dst);
+    }
+
+    /// Save extracted map images to the scan's image directory.
+    fn save_maps(
+        &self,
+        scan_hash: &str,
+        maps: &ocr_import::extract_maps::ExtractedMaps,
+    ) {
+        if !self.config.save_images || scan_hash.is_empty() { return; }
+        let dir = self.image_dir(scan_hash);
+        for (name, img) in &maps.maps {
+            let dst = dir.join(format!("map_{}.png", name));
+            let _ = img.save(&dst);
+        }
     }
 
     fn compute_scan_hash(&self, meta: &DicomMeta) -> String {
@@ -554,8 +648,22 @@ impl PentacamPipeline {
         }
     }
 
+    /// Write source manifests for accumulated scans, then clear the buffer.
+    fn write_pending_manifests(&mut self) {
+        if !self.config.save_images { return; }
+        for (hash, entries) in self.scan_sources.drain() {
+            if entries.is_empty() { continue; }
+            let dir = self.config.output_dir.join("images").join(&hash);
+            let _ = fs::create_dir_all(&dir);
+            if let Err(e) = write_source_manifest(&dir, &entries) {
+                eprintln!("  WARNING: Failed to write source manifest: {}", e);
+            }
+        }
+    }
+
     /// Print final summary and flush all logs.
     pub fn finish(&mut self) {
+        self.write_pending_manifests();
         let _ = self.raw_csv.flush();
         self.error_log.flush();
         self.error_log.print_summary();

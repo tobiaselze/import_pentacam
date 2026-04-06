@@ -14,3 +14,4 @@ walkdir = "2.5"
 csv = "1"
 serde = { version = "1", features = ["derive"] }
 blake3 = "1"
+image = "0.25"
