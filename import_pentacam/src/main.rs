@@ -1,108 +1,99 @@
-use clap::Parser;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+//! import_pentacam — Extract clinical measurements from Pentacam DICOM/PDF/image files.
+//!
+//! Supports single files (DICOM, PDF, image) and PACS directory scanning.
+//! Outputs raw CSV (incremental, per-page) and compact CSV (best value per eye-visit).
 
-use pentacam_types::{EyeVisit, EyeVisitKey};
+use clap::Parser;
+use std::path::PathBuf;
 
 mod eye_visit;
 pub mod field_map;
-pub mod raw_csv;
 pub mod logging;
+pub mod raw_csv;
+pub mod pipeline;
+
+use ocr_import::render::Renderer;
+use pipeline::{PipelineConfig, PentacamPipeline};
 
 #[derive(Parser)]
 #[command(name = "import_pentacam")]
 #[command(about = "Extract clinical measurements from Pentacam DICOM/PDF/image files")]
+#[command(version)]
 struct Args {
-    /// Root directory to scan (recursively), or a single file
+    /// DICOM file, PDF file, image file, or PACS directory to process
     input: PathBuf,
 
     /// Output directory for results and extracted images
     #[arg(short, long, default_value = "pentacam_output")]
     output_dir: PathBuf,
 
-    /// Output CSV filename prefix
-    #[arg(short = 'f', long, default_value = "pentacam_")]
-    output_prefix: String,
-
-    /// Error log file path (default: <output_dir>/errors.log)
-    #[arg(short, long)]
-    error_log: Option<PathBuf>,
-
-    /// Processed files log (for incremental re-runs)
+    /// Processed folders log for restart (default: <output_dir>/processed_folders.csv)
     #[arg(short, long)]
     processed_log: Option<PathBuf>,
 
-    /// Strip patient names from output
+    /// Error/warning log file (default: <output_dir>/errors.log)
     #[arg(short, long)]
-    strip_names: bool,
+    error_log: Option<PathBuf>,
+
+    /// Strip patient names from output
+    #[arg(short = 'x', long)]
+    omit_patient_names: bool,
+
+    /// Log relative paths instead of absolute
+    #[arg(short = 'r', long)]
+    log_relative_paths: bool,
+
+    /// Use MuPDF renderer (default)
+    #[arg(long)]
+    mupdf: bool,
+
+    /// Use Poppler renderer
+    #[arg(long)]
+    poppler: bool,
+
+    /// Disable CUDA GPU acceleration
+    #[arg(long)]
+    no_gpu: bool,
+
+    /// Skip raw CSV, only produce compact output
+    #[arg(long)]
+    compact_only: bool,
 }
 
 fn main() {
     let args = Args::parse();
 
-    // Eye-visit accumulator: all data for all scans, keyed by unique eye-visit
-    let mut visits: HashMap<EyeVisitKey, EyeVisit> = HashMap::new();
-
-    // Discover input files
-    let input = &args.input;
-    if input.is_dir() {
-        for entry in WalkDir::new(input).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                match ext.to_lowercase().as_str() {
-                    "dcm" => process_dicom(path, &mut visits),
-                    "pdf" => process_pdf(path, &mut visits),
-                    "png" | "jpg" | "jpeg" | "bmp" | "tif" | "tiff" => {
-                        process_image(path, &mut visits)
-                    }
-                    _ => {}
-                }
-            }
-        }
+    // Determine renderer
+    let renderer = if args.poppler {
+        eprintln!("Using Poppler renderer");
+        Renderer::Poppler
     } else {
-        // Single file
-        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-            match ext.to_lowercase().as_str() {
-                "dcm" => process_dicom(input, &mut visits),
-                "pdf" => process_pdf(input, &mut visits),
-                "png" | "jpg" | "jpeg" | "bmp" | "tif" | "tiff" => {
-                    process_image(input, &mut visits)
-                }
-                _ => eprintln!("Unsupported file type: {}", input.display()),
-            }
-        }
-    }
+        eprintln!("Using MuPDF renderer");
+        Renderer::MuPdf
+    };
 
-    // Write output
-    println!(
-        "Processed {} eye-visits from input files",
-        visits.len()
+    // Initialize OCR engine
+    let model_dir = PathBuf::from("models");
+    ocr_import::ocr_engine::init(
+        model_dir.join("pp-ocrv5_server_det.onnx").to_str().unwrap(),
+        model_dir.join("en_pp-ocrv5_mobile_rec.onnx").to_str().unwrap(),
+        model_dir.join("en_ppocrv5_dict.txt").to_str().unwrap(),
+    ).expect("Failed to initialize OCR engine");
+
+    // Build pipeline config
+    let config = PipelineConfig::new(
+        args.output_dir,
+        args.omit_patient_names,
+        renderer,
     );
 
-    // TODO: Write merged CSV output with priority rules (SR > OCR > blob, except HWTW)
-    // TODO: Write processed-files log for incremental re-runs
-}
+    // Create and run pipeline
+    let mut pipeline = PentacamPipeline::new(config)
+        .expect("Failed to initialize pipeline");
 
-fn process_dicom(path: &Path, visits: &mut HashMap<EyeVisitKey, EyeVisit>) {
-    let _ = (path, visits);
-    todo!("1. extract_metadata -> DicomMeta
-          2. extract_sr -> Option<DicomSrValues>
-          3. extract_pdf_bytes -> if Some, call ocr_import::process_pdf_bytes
-          4. extract_blob -> if Some, call blob_import::extract_exact
-          5. Build EyeVisitKey, insert/merge into visits HashMap")
-}
+    let t0 = std::time::Instant::now();
+    pipeline.process_input(&args.input);
+    pipeline.finish();
 
-fn process_pdf(path: &Path, visits: &mut HashMap<EyeVisitKey, EyeVisit>) {
-    let _ = (path, visits);
-    todo!("1. ocr_import::process_pdf_file (need_demographics=true)
-          2. Build EyeVisitKey from PdfDemographics
-          3. Insert/merge into visits HashMap")
-}
-
-fn process_image(path: &Path, visits: &mut HashMap<EyeVisitKey, EyeVisit>) {
-    let _ = (path, visits);
-    todo!("1. ocr_import::process_image_file (need_demographics=true)
-          2. Build EyeVisitKey from PdfDemographics
-          3. Insert/merge into visits HashMap")
+    eprintln!("Total time: {:.1}s", t0.elapsed().as_secs_f64());
 }
