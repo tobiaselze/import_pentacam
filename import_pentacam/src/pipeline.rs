@@ -31,11 +31,12 @@ pub struct PipelineConfig {
     pub compact_csv_path: PathBuf,
     pub processed_log_path: PathBuf,
     pub error_log_path: PathBuf,
-    pub save_images: bool,
+    pub save_maps: bool,
+    pub save_pages: bool,
 }
 
 impl PipelineConfig {
-    pub fn new(output_dir: PathBuf, omit_names: bool, renderer: Renderer) -> Self {
+    pub fn new(output_dir: PathBuf, omit_names: bool, renderer: Renderer, save_pages: bool) -> Self {
         let raw_csv_path = output_dir.join("pentacam_raw.csv");
         let compact_csv_path = output_dir.join("pentacam_compact.csv");
         let processed_log_path = output_dir.join("processed_folders.csv");
@@ -48,7 +49,8 @@ impl PipelineConfig {
             compact_csv_path,
             processed_log_path,
             error_log_path,
-            save_images: true,
+            save_maps: true,
+            save_pages,
         }
     }
 }
@@ -126,7 +128,7 @@ impl PentacamPipeline {
             .map_err(|e| format!("Create output dir: {}", e))?;
 
         // Create images directory
-        if config.save_images {
+        if config.save_maps || config.save_pages {
             fs::create_dir_all(config.output_dir.join("images"))
                 .map_err(|e| format!("Create images dir: {}", e))?;
         }
@@ -614,7 +616,7 @@ impl PentacamPipeline {
         printout_type: &str,
         img_path: &Path,
     ) {
-        if !self.config.save_images || scan_hash.is_empty() { return; }
+        if !self.config.save_pages || scan_hash.is_empty() { return; }
         let dir = self.image_dir(scan_hash);
         // Use a short printout type name for the filename
         let type_short = printout_type.replace("FourMaps", "4maps_")
@@ -635,7 +637,7 @@ impl PentacamPipeline {
         scan_hash: &str,
         maps: &ocr_import::extract_maps::ExtractedMaps,
     ) {
-        if !self.config.save_images || scan_hash.is_empty() { return; }
+        if !self.config.save_maps || scan_hash.is_empty() { return; }
         let dir = self.image_dir(scan_hash);
         for (name, img) in &maps.maps {
             let dst = dir.join(format!("map_{}.png", name));
@@ -689,7 +691,7 @@ impl PentacamPipeline {
 
     /// Write source manifests for accumulated scans, then clear the buffer.
     fn write_pending_manifests(&mut self) {
-        if !self.config.save_images { return; }
+        if !self.config.save_maps && !self.config.save_pages { return; }
         for (hash, entries) in self.scan_sources.drain() {
             if entries.is_empty() { continue; }
             let dir = self.config.output_dir.join("images").join(&hash);

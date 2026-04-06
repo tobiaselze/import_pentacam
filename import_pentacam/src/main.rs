@@ -44,6 +44,10 @@ struct Args {
     #[arg(short = 'r', long)]
     log_relative_paths: bool,
 
+    /// Save full rendered printout pages (contains PII — disabled by default)
+    #[arg(long)]
+    save_pages: bool,
+
     /// Use MuPDF renderer (default)
     #[arg(long)]
     mupdf: bool,
@@ -86,6 +90,7 @@ fn main() {
         args.output_dir,
         args.omit_patient_names,
         renderer,
+        args.save_pages,
     );
 
     // Create and run pipeline
