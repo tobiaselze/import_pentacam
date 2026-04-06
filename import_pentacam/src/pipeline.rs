@@ -28,6 +28,7 @@ pub struct PipelineConfig {
     pub omit_patient_names: bool,
     pub renderer: Renderer,
     pub raw_csv_path: PathBuf,
+    pub detailed_csv_path: PathBuf,
     pub compact_csv_path: PathBuf,
     pub processed_log_path: PathBuf,
     pub error_log_path: PathBuf,
@@ -38,6 +39,7 @@ pub struct PipelineConfig {
 impl PipelineConfig {
     pub fn new(output_dir: PathBuf, omit_names: bool, renderer: Renderer, save_pages: bool) -> Self {
         let raw_csv_path = output_dir.join("pentacam_raw.csv");
+        let detailed_csv_path = output_dir.join("pentacam_detailed.csv");
         let compact_csv_path = output_dir.join("pentacam_compact.csv");
         let processed_log_path = output_dir.join("processed_folders.csv");
         let error_log_path = output_dir.join("errors.log");
@@ -46,6 +48,7 @@ impl PipelineConfig {
             omit_patient_names: omit_names,
             renderer,
             raw_csv_path,
+            detailed_csv_path,
             compact_csv_path,
             processed_log_path,
             error_log_path,
@@ -413,19 +416,22 @@ impl PentacamPipeline {
                                 if let Some(result) = ocr_import::process_page(
                                     &png_path, path, page as usize,
                                 ) {
-                                    let mut row = base.clone();
-                                    row.page_number = page;
-                                    row.printout_type = format!("{:?}", result.printout_type);
-                                    row.qa_status = match &result.qa_status {
-                                        QaStatus::Ok => "ok".to_string(),
-                                        QaStatus::Incomplete { reason } => format!("incomplete: {}", reason),
-                                    };
-                                    row.n_fields = result.fields.len() as u32;
-                                    row.fields = result.fields;
-                                    row.confidences = result.confidences.into_iter()
-                                        .map(|(k, v)| (k, v as f32))
-                                        .collect();
-                                    self.write_row(row);
+                                    // Only emit rows for supported printout types
+                                    if Self::is_supported_printout(&result.printout_type) {
+                                        let mut row = base.clone();
+                                        row.page_number = page;
+                                        row.printout_type = format!("{:?}", result.printout_type);
+                                        row.qa_status = match &result.qa_status {
+                                            QaStatus::Ok => "ok".to_string(),
+                                            QaStatus::Incomplete { reason } => format!("incomplete: {}", reason),
+                                        };
+                                        row.n_fields = result.fields.len() as u32;
+                                        row.fields = result.fields;
+                                        row.confidences = result.confidences.into_iter()
+                                            .map(|(k, v)| (k, v as f32))
+                                            .collect();
+                                        self.write_row(row);
+                                    }
                                 }
                                 let _ = fs::remove_file(&png_path);
                             }
@@ -467,9 +473,10 @@ impl PentacamPipeline {
 
         let base = RawRow {
             patient_id: String::new(),
-            patient_name: String::new(),
+            family_name: String::new(),
+            given_name: String::new(),
             dob: String::new(),
-            sex: String::new(),
+            
             eye: String::new(),
             exam_date: String::new(),
             exam_time: String::new(),
@@ -481,7 +488,7 @@ impl PentacamPipeline {
             n_fields: 0,
             device_serial: String::new(),
             software_version: String::new(),
-            scan_hash: String::new(),
+            imagedir: String::new(),
             fields: HashMap::new(),
             confidences: HashMap::new(),
         };
@@ -536,9 +543,10 @@ impl PentacamPipeline {
         if let Some(result) = ocr_import::process_page(path, path, 1) {
             let mut row = RawRow {
                 patient_id: String::new(),
-                patient_name: String::new(),
+                family_name: String::new(),
+            given_name: String::new(),
                 dob: String::new(),
-                sex: String::new(),
+                
                 eye: String::new(),
                 exam_date: String::new(),
                 exam_time: String::new(),
@@ -553,7 +561,7 @@ impl PentacamPipeline {
                 n_fields: result.fields.len() as u32,
                 device_serial: String::new(),
                 software_version: String::new(),
-                scan_hash: String::new(),
+                imagedir: String::new(),
                 fields: result.fields,
                 confidences: result.confidences.into_iter()
                     .map(|(k, v)| (k, v as f32))
@@ -570,9 +578,9 @@ impl PentacamPipeline {
 
     fn write_row(&mut self, row: RawRow) {
         // Track source for manifest
-        if !row.scan_hash.is_empty() {
+        if !row.imagedir.is_empty() {
             self.scan_sources
-                .entry(row.scan_hash.clone())
+                .entry(row.imagedir.clone())
                 .or_default()
                 .push((
                     row.source_file.clone(),
@@ -663,15 +671,23 @@ impl PentacamPipeline {
     }
 
     fn make_base_row(&self, meta: &DicomMeta, source_folder: &str, source_file: &str, scan_hash: &str) -> RawRow {
+        // Split DICOM PatientName (FamilyName^GivenName^...) into parts
+        let full_name = meta.patient_name.clone().unwrap_or_default();
+        let name_parts: Vec<&str> = full_name.split('^').collect();
+        let (family_name, given_name) = if self.config.omit_patient_names {
+            (String::new(), String::new())
+        } else {
+            (
+                name_parts.first().unwrap_or(&"").to_string(),
+                name_parts.get(1).unwrap_or(&"").to_string(),
+            )
+        };
+
         RawRow {
             patient_id: meta.patient_id.clone().unwrap_or_default(),
-            patient_name: if self.config.omit_patient_names {
-                String::new()
-            } else {
-                meta.patient_name.clone().unwrap_or_default()
-            },
+            family_name,
+            given_name,
             dob: meta.date_of_birth.clone().unwrap_or_default(),
-            sex: meta.sex.clone().unwrap_or_default(),
             eye: meta.laterality.as_ref().map(|l| format!("{}", l)).unwrap_or_default(),
             exam_date: meta.exam_date.clone().unwrap_or_default(),
             exam_time: meta.exam_time.clone().unwrap_or_default(),
@@ -683,7 +699,7 @@ impl PentacamPipeline {
             n_fields: 0,
             device_serial: meta.device_serial.clone().unwrap_or_default(),
             software_version: meta.software_version.clone().unwrap_or_default(),
-            scan_hash: scan_hash.to_string(),
+            imagedir: scan_hash.to_string(),
             fields: HashMap::new(),
             confidences: HashMap::new(),
         }
@@ -700,6 +716,16 @@ impl PentacamPipeline {
                 eprintln!("  WARNING: Failed to write source manifest: {}", e);
             }
         }
+    }
+
+    /// Check if a printout type is supported for extraction.
+    fn is_supported_printout(pt: &PrintoutType) -> bool {
+        matches!(pt,
+            PrintoutType::FourMapsRefractive
+            | PrintoutType::FourMapsSelectable
+            | PrintoutType::TopometricKcStaging
+            | PrintoutType::BelinAmbrosio
+        )
     }
 
     /// Print final summary and flush all logs.

@@ -101,14 +101,20 @@ fn main() {
     pipeline.process_input(&args.input);
     pipeline.finish();
 
-    // Generate compact CSV
-    let compact_path = pipeline.config.compact_csv_path.clone();
+    // Generate detailed and compact CSVs
     let raw_path = pipeline.config.raw_csv_path.clone();
+    let detailed_path = pipeline.config.detailed_csv_path.clone();
+    let compact_path = pipeline.config.compact_csv_path.clone();
+    let omit = args.omit_patient_names;
     if pipeline.total_rows > 0 {
-        eprintln!("\nGenerating compact CSV...");
-        match compact_csv::generate_compact(&raw_path, &compact_path, args.omit_patient_names) {
+        eprintln!("\nGenerating output CSVs...");
+        match compact_csv::generate_detailed(&raw_path, &detailed_path, omit) {
+            Ok(n) => eprintln!("Detailed CSV: {} eye-visits → {}", n, detailed_path.display()),
+            Err(e) => eprintln!("WARNING: Detailed CSV failed: {}", e),
+        }
+        match compact_csv::generate_compact(&raw_path, &compact_path, omit) {
             Ok(n) => eprintln!("Compact CSV: {} eye-visits → {}", n, compact_path.display()),
-            Err(e) => eprintln!("WARNING: Compact CSV generation failed: {}", e),
+            Err(e) => eprintln!("WARNING: Compact CSV failed: {}", e),
         }
     }
 

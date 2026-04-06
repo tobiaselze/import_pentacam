@@ -19,9 +19,9 @@ use crate::field_map::ALL_FIELDS;
 pub struct RawRow {
     // Identity
     pub patient_id: String,
-    pub patient_name: String,
+    pub family_name: String,
+    pub given_name: String,
     pub dob: String,
-    pub sex: String,
     pub eye: String,
     pub exam_date: String,
     pub exam_time: String,
@@ -34,7 +34,7 @@ pub struct RawRow {
     pub n_fields: u32,
     pub device_serial: String,
     pub software_version: String,
-    pub scan_hash: String,
+    pub imagedir: String,
     // Field values and confidences
     pub fields: HashMap<String, f64>,
     pub confidences: HashMap<String, f32>,
@@ -71,14 +71,14 @@ impl RawCsvWriter {
 
     fn write_header(writer: &mut BufWriter<File>, omit_patient_name: bool) -> std::io::Result<()> {
         let mut header = if omit_patient_name {
-            "patient_id,dob,sex,eye,exam_date,exam_time,\
+            "id,birthdate,eye,exam_date,exam_time,\
                 source_folder,source_file,page_number,printout_type,qa_status,\
-                n_fields,device_serial,software_version,scan_hash"
+                n_fields,device_serial,software_version,imagedir"
                 .to_string()
         } else {
-            "patient_id,patient_name,dob,sex,eye,exam_date,exam_time,\
+            "id,FamilyName,GivenName,birthdate,eye,exam_date,exam_time,\
                 source_folder,source_file,page_number,printout_type,qa_status,\
-                n_fields,device_serial,software_version,scan_hash"
+                n_fields,device_serial,software_version,imagedir"
                 .to_string()
         };
 
@@ -98,10 +98,9 @@ impl RawCsvWriter {
     pub fn write_row(&mut self, row: &RawRow) -> std::io::Result<()> {
         let mut line = if self.omit_patient_name {
             format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&row.patient_id),
                 csv_escape(&row.dob),
-                csv_escape(&row.sex),
                 csv_escape(&row.eye),
                 csv_escape(&row.exam_date),
                 csv_escape(&row.exam_time),
@@ -113,15 +112,15 @@ impl RawCsvWriter {
                 row.n_fields,
                 csv_escape(&row.device_serial),
                 csv_escape(&row.software_version),
-                csv_escape(&row.scan_hash),
+                csv_escape(&row.imagedir),
             )
         } else {
             format!(
                 "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&row.patient_id),
-                csv_escape(&row.patient_name),
+                csv_escape(&row.family_name),
+                csv_escape(&row.given_name),
                 csv_escape(&row.dob),
-                csv_escape(&row.sex),
                 csv_escape(&row.eye),
                 csv_escape(&row.exam_date),
                 csv_escape(&row.exam_time),
@@ -133,7 +132,7 @@ impl RawCsvWriter {
                 row.n_fields,
                 csv_escape(&row.device_serial),
                 csv_escape(&row.software_version),
-                csv_escape(&row.scan_hash),
+                csv_escape(&row.imagedir),
             )
         };
 
@@ -168,7 +167,7 @@ impl RawCsvWriter {
 /// Write a sources.csv manifest into an image directory.
 pub fn write_source_manifest(
     image_dir: &Path,
-    entries: &[(String, u32, String, String)], // (filename, page, printout_type, data_source)
+    entries: &[(String, u32, String, String)],
 ) -> std::io::Result<()> {
     let path = image_dir.join("sources.csv");
     let mut f = BufWriter::new(File::create(path)?);
@@ -183,7 +182,6 @@ pub fn write_source_manifest(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Escape a string for CSV: quote if it contains comma, quote, or newline.
 fn csv_escape(s: &str) -> String {
     if s.contains(',') || s.contains('"') || s.contains('\n') {
         format!("\"{}\"", s.replace('"', "\"\""))
