@@ -511,7 +511,24 @@ fn crop_rescue_suspicious(
         .map(|&(name, lo, hi)| (name, lo, hi))
         .collect();
 
-    if suspicious.is_empty() { return; }
+    // Also flag fields where OCR raw text starts with "D." — likely misread "0."
+    // (colored LCD digits: green/blue "0" → "D"). These are in-range but wrong.
+    let misread_zero: Vec<(String, f64, f64)> = labeled.iter()
+        .filter(|(name, loc)| {
+            name.starts_with("Belin_")
+                && loc.raw_text.trim().starts_with("D.")
+                && loc.raw_text.trim().len() > 2
+                && loc.raw_text.trim().as_bytes().get(2).map_or(false, |b| b.is_ascii_digit())
+        })
+        .map(|(name, _)| (name.clone(), 0.0, 0.0))
+        .collect();
+
+    let mut all_suspicious: Vec<(String, f64, f64)> = suspicious.into_iter()
+        .map(|(n, lo, hi)| (n.to_string(), lo, hi))
+        .collect();
+    all_suspicious.extend(misread_zero);
+
+    if all_suspicious.is_empty() { return; }
 
     let img = match image::open(img_path) {
         Ok(i) => i,
@@ -519,8 +536,8 @@ fn crop_rescue_suspicious(
     };
     let (iw, ih) = img.dimensions();
 
-    for (field_name, _lo, _hi) in &suspicious {
-        let loc = match labeled.get(*field_name) {
+    for (field_name, _lo, _hi) in &all_suspicious {
+        let loc = match labeled.get(field_name.as_str()) {
             Some(l) => l.clone(),
             None => continue,
         };
