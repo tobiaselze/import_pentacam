@@ -47,11 +47,12 @@ pub struct RawRow {
 /// Append-mode raw CSV writer. Creates file with header if new, appends if existing.
 pub struct RawCsvWriter {
     writer: BufWriter<File>,
+    omit_patient_name: bool,
 }
 
 impl RawCsvWriter {
     /// Open or create the raw CSV file. Writes header if the file is new/empty.
-    pub fn open(path: &Path) -> std::io::Result<Self> {
+    pub fn open(path: &Path, omit_patient_name: bool) -> std::io::Result<Self> {
         let exists = path.exists() && std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false);
 
         let file = OpenOptions::new()
@@ -62,17 +63,24 @@ impl RawCsvWriter {
         let mut writer = BufWriter::new(file);
 
         if !exists {
-            Self::write_header(&mut writer)?;
+            Self::write_header(&mut writer, omit_patient_name)?;
         }
 
-        Ok(RawCsvWriter { writer })
+        Ok(RawCsvWriter { writer, omit_patient_name })
     }
 
-    fn write_header(writer: &mut BufWriter<File>) -> std::io::Result<()> {
-        let mut header = "patient_id,patient_name,dob,sex,eye,exam_date,exam_time,\
-            source_folder,source_file,page_number,printout_type,qa_status,\
-            n_fields,device_serial,software_version,scan_hash"
-            .to_string();
+    fn write_header(writer: &mut BufWriter<File>, omit_patient_name: bool) -> std::io::Result<()> {
+        let mut header = if omit_patient_name {
+            "patient_id,dob,sex,eye,exam_date,exam_time,\
+                source_folder,source_file,page_number,printout_type,qa_status,\
+                n_fields,device_serial,software_version,scan_hash"
+                .to_string()
+        } else {
+            "patient_id,patient_name,dob,sex,eye,exam_date,exam_time,\
+                source_folder,source_file,page_number,printout_type,qa_status,\
+                n_fields,device_serial,software_version,scan_hash"
+                .to_string()
+        };
 
         for &field in ALL_FIELDS {
             header.push(',');
@@ -88,25 +96,46 @@ impl RawCsvWriter {
 
     /// Write one raw row to the CSV.
     pub fn write_row(&mut self, row: &RawRow) -> std::io::Result<()> {
-        let mut line = format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            csv_escape(&row.patient_id),
-            csv_escape(&row.patient_name),
-            csv_escape(&row.dob),
-            csv_escape(&row.sex),
-            csv_escape(&row.eye),
-            csv_escape(&row.exam_date),
-            csv_escape(&row.exam_time),
-            csv_escape(&row.source_folder),
-            csv_escape(&row.source_file),
-            row.page_number,
-            csv_escape(&row.printout_type),
-            csv_escape(&row.qa_status),
-            row.n_fields,
-            csv_escape(&row.device_serial),
-            csv_escape(&row.software_version),
-            csv_escape(&row.scan_hash),
-        );
+        let mut line = if self.omit_patient_name {
+            format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                csv_escape(&row.patient_id),
+                csv_escape(&row.dob),
+                csv_escape(&row.sex),
+                csv_escape(&row.eye),
+                csv_escape(&row.exam_date),
+                csv_escape(&row.exam_time),
+                csv_escape(&row.source_folder),
+                csv_escape(&row.source_file),
+                row.page_number,
+                csv_escape(&row.printout_type),
+                csv_escape(&row.qa_status),
+                row.n_fields,
+                csv_escape(&row.device_serial),
+                csv_escape(&row.software_version),
+                csv_escape(&row.scan_hash),
+            )
+        } else {
+            format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                csv_escape(&row.patient_id),
+                csv_escape(&row.patient_name),
+                csv_escape(&row.dob),
+                csv_escape(&row.sex),
+                csv_escape(&row.eye),
+                csv_escape(&row.exam_date),
+                csv_escape(&row.exam_time),
+                csv_escape(&row.source_folder),
+                csv_escape(&row.source_file),
+                row.page_number,
+                csv_escape(&row.printout_type),
+                csv_escape(&row.qa_status),
+                row.n_fields,
+                csv_escape(&row.device_serial),
+                csv_escape(&row.software_version),
+                csv_escape(&row.scan_hash),
+            )
+        };
 
         // Field values
         for &field in ALL_FIELDS {

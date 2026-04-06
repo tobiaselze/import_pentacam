@@ -132,7 +132,7 @@ impl PentacamPipeline {
         }
 
         // Open raw CSV writer
-        let raw_csv = RawCsvWriter::open(&config.raw_csv_path)
+        let raw_csv = RawCsvWriter::open(&config.raw_csv_path, config.omit_patient_names)
             .map_err(|e| format!("Open raw CSV: {}", e))?;
 
         // Open processed log
