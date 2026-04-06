@@ -26,7 +26,7 @@ pub fn init(det_model: &str, rec_model: &str, dict_path: &str) -> Result<(), Str
         .with_execution_providers(vec![
             OrtExecutionProvider::CUDA {
                 device_id: None,
-                gpu_mem_limit: Some(8 * 1024 * 1024 * 1024), // 8 GB limit
+                gpu_mem_limit: None, // use all available GPU memory
                 arena_extend_strategy: Some("1".to_string()), // kSameAsRequested — no power-of-2 bloat
                 cudnn_conv_algo_search: None,
                 cudnn_conv_use_max_workspace: None,
