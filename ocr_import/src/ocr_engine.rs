@@ -19,26 +19,43 @@ pub struct OcrItem {
 /// Global OCR engine singleton.
 static OCR_ENGINE: OnceCell<OAROCR> = OnceCell::new();
 
-/// Initialize the OCR engine with model paths.
-/// Tries CUDA first, falls back to CPU.
-pub fn init(det_model: &str, rec_model: &str, dict_path: &str) -> Result<(), String> {
-    let ort_config = OrtSessionConfig::new()
+/// Saved model paths for reinit.
+static MODEL_PATHS: OnceCell<(String, String, String)> = OnceCell::new();
+
+fn make_ort_config() -> OrtSessionConfig {
+    OrtSessionConfig::new()
         .with_execution_providers(vec![
             OrtExecutionProvider::CUDA {
                 device_id: None,
-                gpu_mem_limit: None, // use all available GPU memory
-                arena_extend_strategy: Some("1".to_string()), // kSameAsRequested — no power-of-2 bloat
+                gpu_mem_limit: None,
+                arena_extend_strategy: Some("1".to_string()),
                 cudnn_conv_algo_search: None,
                 cudnn_conv_use_max_workspace: None,
             },
             OrtExecutionProvider::CPU,
-        ]);
+        ])
+}
+
+/// Initialize the OCR engine with model paths.
+/// Tries CUDA first, falls back to CPU.
+pub fn init(det_model: &str, rec_model: &str, dict_path: &str) -> Result<(), String> {
+    MODEL_PATHS.set((det_model.to_string(), rec_model.to_string(), dict_path.to_string()))
+        .map_err(|_| "Model paths already set".to_string())?;
 
     let ocr = OAROCRBuilder::new(det_model, rec_model, dict_path)
-        .ort_session(ort_config)
+        .ort_session(make_ort_config())
         .build()
         .map_err(|e| format!("Failed to build OCR engine: {}", e))?;
     OCR_ENGINE.set(ocr).map_err(|_| "OCR engine already initialized".to_string())
+}
+
+/// Build a fresh OCR engine (for retry after failure).
+fn build_fresh_engine() -> Result<OAROCR, String> {
+    let (det, rec, dict) = MODEL_PATHS.get().expect("Model paths not initialized");
+    OAROCRBuilder::new(det, rec, dict)
+        .ort_session(make_ort_config())
+        .build()
+        .map_err(|e| format!("Failed to build fresh OCR engine: {}", e))
 }
 
 fn get_engine() -> &'static OAROCR {
@@ -73,10 +90,23 @@ fn results_to_items(results: &[OAROCRResult]) -> Vec<OcrItem> {
 }
 
 /// Run full-page OCR on an image file.
+/// On failure, retries once with a fresh engine (recovers from GPU memory issues).
 pub fn run_full_page(img_path: &Path) -> Result<Vec<OcrItem>, String> {
-    let ocr = get_engine();
     let image = load_image(img_path).map_err(|e| format!("Failed to load image: {}", e))?;
-    let results = ocr.predict(vec![image]).map_err(|e| format!("OCR prediction failed: {}", e))?;
+
+    // Try with the global engine first
+    let ocr = get_engine();
+    match ocr.predict(vec![image.clone()]) {
+        Ok(results) => return Ok(results_to_items(&results)),
+        Err(e) => {
+            eprintln!("  OCR failed ({}), retrying with fresh engine...", e);
+        }
+    }
+
+    // Retry with a fresh engine (resets GPU memory state)
+    let fresh = build_fresh_engine()?;
+    let results = fresh.predict(vec![image])
+        .map_err(|e| format!("OCR retry also failed: {}", e))?;
     Ok(results_to_items(&results))
 }
 
