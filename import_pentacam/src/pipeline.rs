@@ -692,8 +692,7 @@ impl PentacamPipeline {
         img_path: &Path,
     ) {
         if !self.config.save_pages || scan_hash.is_empty() { return; }
-        let (dir, is_new) = self.image_dir(scan_hash);
-        if !is_new { return; } // first run wins
+        let (dir, _is_new) = self.image_dir(scan_hash);
         // Use a short printout type name for the filename
         let type_short = printout_type.replace("FourMaps", "4maps_")
             .replace("Refractive", "refr")
@@ -704,7 +703,9 @@ impl PentacamPipeline {
             .replace(' ', "_")
             .to_lowercase();
         let dst = dir.join(format!("page{}_{}.png", page_num, type_short));
-        let _ = fs::copy(img_path, &dst);
+        if !dst.exists() { // per-file first-run-wins
+            let _ = fs::copy(img_path, &dst);
+        }
     }
 
     /// Save extracted map images to the scan's image directory.
@@ -714,11 +715,12 @@ impl PentacamPipeline {
         maps: &ocr_import::extract_maps::ExtractedMaps,
     ) {
         if !self.config.save_maps || scan_hash.is_empty() { return; }
-        let (dir, is_new) = self.image_dir(scan_hash);
-        if !is_new { return; } // first run wins
+        let (dir, _is_new) = self.image_dir(scan_hash);
         for (name, img) in &maps.maps {
             let dst = dir.join(format!("map_{}.png", name));
-            let _ = img.save(&dst);
+            if !dst.exists() { // per-file first-run-wins
+                let _ = img.save(&dst);
+            }
         }
     }
 
