@@ -8,6 +8,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use image::GenericImageView;
 use pentacam_types::{DicomMeta, Laterality, PrintoutType, QaStatus};
 use ocr_import::render::Renderer;
 
@@ -37,7 +38,7 @@ pub struct PipelineConfig {
 }
 
 impl PipelineConfig {
-    pub fn new(output_dir: PathBuf, omit_names: bool, renderer: Renderer, save_pages: bool) -> Self {
+    pub fn new(output_dir: PathBuf, omit_names: bool, renderer: Renderer, save_pages: bool, save_maps: bool) -> Self {
         let raw_csv_path = output_dir.join("pentacam_raw.csv");
         let detailed_csv_path = output_dir.join("pentacam_detailed.csv");
         let compact_csv_path = output_dir.join("pentacam_compact.csv");
@@ -52,7 +53,7 @@ impl PipelineConfig {
             compact_csv_path,
             processed_log_path,
             error_log_path,
-            save_maps: true,
+            save_maps,
             save_pages,
         }
     }
@@ -253,11 +254,21 @@ impl PentacamPipeline {
                 self.process_image(path);
             }
             _ => {
-                self.error_log.warn(
-                    LogCategory::DicomError,
-                    &path.display().to_string(),
-                    &format!("Unsupported file type: .{}", ext),
-                );
+                // Try opening as image by magic bytes (handles .JPG_1 etc.)
+                if image::io::Reader::open(path)
+                    .and_then(|r| r.with_guessed_format())
+                    .ok()
+                    .and_then(|r| r.format())
+                    .is_some()
+                {
+                    self.process_image(path);
+                } else {
+                    self.error_log.warn(
+                        LogCategory::DicomError,
+                        &path.display().to_string(),
+                        &format!("Unsupported file type: .{}", ext),
+                    );
+                }
             }
         }
     }
@@ -604,7 +615,38 @@ impl PentacamPipeline {
             .unwrap_or("unknown");
         let folder = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
 
-        if let Some(result) = ocr_import::process_page(path, path, 1) {
+        // Upscale low-resolution images to ~300 DPI before OCR.
+        // A Pentacam printout at 300 DPI is ~3500px wide.
+        // Use guessed format to handle non-standard extensions (.JPG_1 etc.)
+        let ocr_path = match image::io::Reader::open(path)
+            .and_then(|r| r.with_guessed_format())
+            .map_err(|e| image::ImageError::IoError(e))
+            .and_then(|r| r.decode())
+        {
+            Ok(img) => {
+                let (w, _h) = img.dimensions();
+                if w < 2800 {
+                    // Upscale: target ~3500px wide
+                    let scale = 3500.0 / w as f64;
+                    let new_w = (w as f64 * scale) as u32;
+                    let new_h = (img.height() as f64 * scale) as u32;
+                    let resized = img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
+                    let tmp = ocr_import::temp_path("upscaled.png");
+                    if resized.save(&tmp).is_ok() {
+                        eprintln!("  upscaled {}x{} → {}x{}", w, img.height(), new_w, new_h);
+                        Some(tmp)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+        let effective_path = ocr_path.as_deref().unwrap_or(path);
+
+        if let Some(result) = ocr_import::process_page(effective_path, path, 1) {
             let mut row = RawRow {
                 patient_id: String::new(),
                 family_name: String::new(),
