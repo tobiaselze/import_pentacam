@@ -43,6 +43,10 @@ struct Args {
     #[arg(long)]
     save_pages: bool,
 
+    /// Skip map image extraction (no images/ directory)
+    #[arg(long)]
+    no_images: bool,
+
     /// Skip detailed CSV generation
     #[arg(long)]
     no_detailed: bool,
@@ -86,6 +90,7 @@ fn main() {
         args.omit_patient_names,
         renderer,
         args.save_pages,
+        !args.no_images,
     );
 
     // Create and run pipeline
