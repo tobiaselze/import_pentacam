@@ -18,8 +18,12 @@ pub fn detect_printout_type(items: &[OcrItem]) -> Option<PrintoutType> {
 
     if all_text.contains("CATARACT") && all_text.contains("PRE") {
         Some(PrintoutType::Other("Cataract Pre-OP".into()))
-    } else if all_text.contains("REFRACTIVE") {
+    } else if all_text.contains("4 MAPS") && all_text.contains("REFRACTIVE") {
         Some(PrintoutType::FourMapsRefractive)
+    } else if all_text.contains("REFRACTIVE") {
+        // Old firmware layout: title is just "Refractive" without "4 Maps" prefix.
+        // Different field arrangement (tables top, 3 maps bottom) — unsupported.
+        Some(PrintoutType::Other("Refractive (old layout)".into()))
     } else if all_text.contains("SELECTABLE") {
         Some(PrintoutType::FourMapsSelectable)
     } else if all_text.contains("TOPOMETRIC")
