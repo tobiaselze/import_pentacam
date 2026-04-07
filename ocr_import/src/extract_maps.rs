@@ -22,7 +22,7 @@ pub fn extract_maps(
     printout_type: &str,
 ) -> ExtractedMaps {
     let ptype = printout_type.to_lowercase();
-    let maps = if ptype.contains("fourmaps") || ptype.contains("refractive") || ptype.contains("selectable") || ptype.contains("4maps") {
+    let maps = if ptype.contains("refractive") && !ptype.contains("old layout") {
         extract_4mr_maps(img, items)
     } else if ptype.contains("belin") && (ptype.contains("ectasia") || ptype.contains("ambrosio") || ptype.contains("belinambrosio")) {
         extract_belin_maps(img, items)
