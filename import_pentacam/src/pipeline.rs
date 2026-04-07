@@ -646,6 +646,18 @@ impl PentacamPipeline {
         };
         let effective_path = ocr_path.as_deref().unwrap_or(path);
 
+        // Run OCR + extract maps before process_page (which may clean up temp files)
+        let ocr_items = ocr_import::ocr_engine::run_full_page(effective_path).ok();
+        let map_data = if let Some(ref items) = ocr_items {
+            if let Ok(page_img) = image::open(effective_path) {
+                if let Some(pt) = ocr_import::printout_detect::detect_printout_type(items) {
+                    let pt_str = format!("{:?}", pt);
+                    let maps = ocr_import::extract_maps::extract_maps(&page_img, items, &pt_str);
+                    if !maps.maps.is_empty() { Some(maps) } else { None }
+                } else { None }
+            } else { None }
+        } else { None };
+
         if let Some(result) = ocr_import::process_page(effective_path, path, 1) {
             // Use demographics from OCR header when no DICOM metadata
             let (patient_id, family_name, given_name, dob, eye, exam_date, exam_time) =
@@ -692,6 +704,15 @@ impl PentacamPipeline {
                 String::new()
             };
 
+            let pt_str = format!("{:?}", result.printout_type);
+
+            // Save maps if we have an imagedir
+            if !imagedir.is_empty() {
+                if let Some(ref maps) = map_data {
+                    self.save_maps(&imagedir, maps);
+                }
+            }
+
             let row = RawRow {
                 patient_id,
                 family_name,
@@ -703,7 +724,7 @@ impl PentacamPipeline {
                 source_folder: folder,
                 source_file: fname.to_string(),
                 page_number: 1,
-                printout_type: format!("{:?}", result.printout_type),
+                printout_type: pt_str,
                 qa_status: match &result.qa_status {
                     QaStatus::Ok => "ok".to_string(),
                     QaStatus::Incomplete { reason } => format!("incomplete: {}", reason),
