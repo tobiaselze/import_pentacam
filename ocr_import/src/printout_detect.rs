@@ -16,7 +16,9 @@ pub fn detect_printout_type(items: &[OcrItem]) -> Option<PrintoutType> {
         .collect::<Vec<_>>()
         .join(" ");
 
-    if all_text.contains("REFRACTIVE") {
+    if all_text.contains("CATARACT") && all_text.contains("PRE") {
+        Some(PrintoutType::Other("Cataract Pre-OP".into()))
+    } else if all_text.contains("REFRACTIVE") {
         Some(PrintoutType::FourMapsRefractive)
     } else if all_text.contains("SELECTABLE") {
         Some(PrintoutType::FourMapsSelectable)
@@ -37,8 +39,6 @@ pub fn detect_printout_type(items: &[OcrItem]) -> Option<PrintoutType> {
         Some(PrintoutType::Holladay)
     } else if all_text.contains("COMPARE") && all_text.contains("EXAM") {
         Some(PrintoutType::Other("Compare 4 Exams".into()))
-    } else if all_text.contains("CATARACT") && all_text.contains("PRE") {
-        Some(PrintoutType::Other("Cataract Pre-OP".into()))
     } else if all_text.contains("SCHEIMPFLUG") {
         Some(PrintoutType::Other("Scheimpflug Images".into()))
     } else if all_text.contains("OVERVIEW") {
