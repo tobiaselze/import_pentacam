@@ -919,12 +919,14 @@ impl PentacamPipeline {
 
     /// Check if a printout type is supported for extraction.
     fn is_supported_printout(pt: &PrintoutType) -> bool {
-        matches!(pt,
+        match pt {
             PrintoutType::FourMapsRefractive
             | PrintoutType::FourMapsSelectable
             | PrintoutType::TopometricKcStaging
-            | PrintoutType::BelinAmbrosio
-        )
+            | PrintoutType::BelinAmbrosio => true,
+            PrintoutType::Other(s) if s == "Refractive (gen1)" => true,
+            _ => false,
+        }
     }
 
     /// Print final summary and flush all logs.

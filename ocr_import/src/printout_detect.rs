@@ -20,10 +20,18 @@ pub fn detect_printout_type(items: &[OcrItem]) -> Option<PrintoutType> {
         Some(PrintoutType::Other("Cataract Pre-OP".into()))
     } else if all_text.contains("4 MAPS") && all_text.contains("REFRACTIVE") {
         Some(PrintoutType::FourMapsRefractive)
-    } else if all_text.contains("REFRACTIVE") {
-        // Old firmware layout: title is just "Refractive" without "4 Maps" prefix.
-        // Different field arrangement (tables top, 3 maps bottom) — unsupported.
+    } else if all_text.contains("REFRACTIVE") && all_text.contains("CTSP") {
+        // Old firmware layout: "Refractive" title with CTSP chart, Asphericity table,
+        // Indices section at top, 3 maps at bottom — not 4MR-compatible.
         Some(PrintoutType::Other("Refractive (old layout)".into()))
+    } else if all_text.contains("REFRACTIVE")
+        && (all_text.contains("SAGITTAL") || all_text.contains("AXIAL"))
+        && all_text.contains("ELEVATION")
+    {
+        // Gen1 Pentacam: subtitle "Refractive" with 4MR-compatible layout
+        // (2x2 map grid with curvature + elevation anchors, data table on left).
+        // Distinct type to track differences (e.g. "Sagittal Curvature" map title).
+        Some(PrintoutType::Other("Refractive (gen1)".into()))
     } else if all_text.contains("SELECTABLE") {
         Some(PrintoutType::FourMapsSelectable)
     } else if all_text.contains("TOPOMETRIC")
