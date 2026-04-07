@@ -16,21 +16,30 @@ pub fn detect_printout_type(items: &[OcrItem]) -> Option<PrintoutType> {
         .collect::<Vec<_>>()
         .join(" ");
 
+    // Title region: top 10% of page (titles are in the header bar).
+    // Use max cy across all items as a proxy for page height.
+    let max_cy = items.iter().map(|i| i.cy).fold(0.0f32, f32::max);
+    let title_limit = max_cy * 0.10;
+    let title_text: String = items.iter()
+        .filter(|item| item.cy < title_limit)
+        .map(|item| item.text.to_uppercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Most types use all_text (whole page) — keywords are unique enough.
+    // Only "REFRACTIVE" (ambiguous) uses title_text for primary detection.
     if all_text.contains("CATARACT") && all_text.contains("PRE") {
         Some(PrintoutType::Other("Cataract Pre-OP".into()))
     } else if all_text.contains("4 MAPS") && all_text.contains("REFRACTIVE") {
         Some(PrintoutType::FourMapsRefractive)
-    } else if all_text.contains("REFRACTIVE") && all_text.contains("CTSP") {
-        // Old firmware layout: "Refractive" title with CTSP chart, Asphericity table,
-        // Indices section at top, 3 maps at bottom — not 4MR-compatible.
+    } else if title_text.contains("REFRACTIVE") && all_text.contains("CTSP") {
+        // Old firmware layout: "Refractive" in title with CTSP chart on page.
         Some(PrintoutType::Other("Refractive (old layout)".into()))
-    } else if all_text.contains("REFRACTIVE")
-        && (all_text.contains("SAGITTAL") || all_text.contains("AXIAL"))
+    } else if title_text.contains("REFRACTIVE")
+        && all_text.contains("SAGITTAL")
         && all_text.contains("ELEVATION")
     {
-        // Gen1 Pentacam: subtitle "Refractive" with 4MR-compatible layout
-        // (2x2 map grid with curvature + elevation anchors, data table on left).
-        // Distinct type to track differences (e.g. "Sagittal Curvature" map title).
+        // Gen1 Pentacam: "Refractive" in title/subtitle area, 4MR-compatible layout.
         Some(PrintoutType::Other("Refractive (gen1)".into()))
     } else if all_text.contains("SELECTABLE") {
         Some(PrintoutType::FourMapsSelectable)
