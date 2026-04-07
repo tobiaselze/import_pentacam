@@ -94,6 +94,33 @@ pub fn process_page_with_options(
     };
     let t_fullpage = t_start.elapsed();
 
+    process_page_inner(img_path, source_file, page_number, items, save, Some(t_fullpage))
+}
+
+/// Process a page using pre-computed OCR items (avoids double OCR run).
+///
+/// `img_path` is still needed for crop rescue (which loads image regions from disk).
+/// `items` are the OCR results from a prior `run_full_page` or `run_full_page_mem` call.
+pub fn process_page_with_items(
+    img_path: &Path,
+    source_file: &Path,
+    page_number: usize,
+    items: Vec<ocr_engine::OcrItem>,
+) -> Option<PrintoutResult> {
+    process_page_inner(img_path, source_file, page_number, items, None, None)
+}
+
+/// Shared implementation for page processing after OCR items are available.
+fn process_page_inner(
+    img_path: &Path,
+    source_file: &Path,
+    page_number: usize,
+    items: Vec<ocr_engine::OcrItem>,
+    save: Option<&SaveOptions>,
+    t_fullpage: Option<std::time::Duration>,
+) -> Option<PrintoutResult> {
+    let t_start = std::time::Instant::now();
+
     // Step 2: Detect printout type
     let printout_type = match printout_detect::detect_printout_type(&items) {
         Some(pt) => pt,
@@ -170,8 +197,13 @@ pub fn process_page_with_options(
     // Log timing
     let t_total = t_start.elapsed();
     if matches!(printout_type, PrintoutType::BelinAmbrosio) {
-        eprintln!("  timing: fullpage={:.1}s total={:.1}s ({} fields)",
-            t_fullpage.as_secs_f64(), t_total.as_secs_f64(), n_located);
+        if let Some(t_fp) = t_fullpage {
+            eprintln!("  timing: fullpage={:.1}s total={:.1}s ({} fields)",
+                t_fp.as_secs_f64(), t_total.as_secs_f64(), n_located);
+        } else {
+            eprintln!("  timing: total={:.1}s ({} fields)",
+                t_total.as_secs_f64(), n_located);
+        }
     }
 
     // Convert to output format

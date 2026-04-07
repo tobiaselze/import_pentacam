@@ -459,7 +459,7 @@ impl PentacamPipeline {
                     for page in 1..=n_pages {
                         match ocr_import::render::render_pdf_page(pdf, page, 300, self.config.renderer) {
                             Ok(png_path) => {
-                                // Run OCR
+                                // Run OCR ONCE for both map extraction and field extraction
                                 let ocr_items = ocr_import::ocr_engine::run_full_page(&png_path).ok();
 
                                 if let Some(ref items) = ocr_items {
@@ -487,10 +487,15 @@ impl PentacamPipeline {
                                     }
                                 }
 
-                                // Full pipeline processing (field extraction etc.)
-                                if let Some(result) = ocr_import::process_page(
-                                    &png_path, path, page as usize,
-                                ) {
+                                // Field extraction using the SAME OCR items (no second OCR run)
+                                let result_opt = if let Some(items) = ocr_items {
+                                    ocr_import::process_page_with_items(
+                                        &png_path, path, page as usize, items,
+                                    )
+                                } else {
+                                    None
+                                };
+                                if let Some(result) = result_opt {
                                     // Only emit rows for supported printout types
                                     if Self::is_supported_printout(&result.printout_type) {
                                         let mut row = base.clone();
@@ -618,11 +623,12 @@ impl PentacamPipeline {
         // Upscale low-resolution images to ~300 DPI before OCR.
         // A Pentacam printout at 300 DPI is ~3500px wide.
         // Use guessed format to handle non-standard extensions (.JPG_1 etc.)
-        let ocr_path = match image::io::Reader::open(path)
+        let decoded = image::io::Reader::open(path)
             .and_then(|r| r.with_guessed_format())
             .map_err(|e| image::ImageError::IoError(e))
-            .and_then(|r| r.decode())
-        {
+            .and_then(|r| r.decode());
+
+        let (upscaled_rgb, upscaled_tmp, page_img) = match decoded {
             Ok(img) => {
                 let (w, _h) = img.dimensions();
                 if w < 2800 {
@@ -631,34 +637,47 @@ impl PentacamPipeline {
                     let new_w = (w as f64 * scale) as u32;
                     let new_h = (img.height() as f64 * scale) as u32;
                     let resized = img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
+                    eprintln!("  upscaled {}x{} → {}x{}", w, img.height(), new_w, new_h);
+                    // Save to temp file for crop rescue (which loads regions from disk)
                     let tmp = ocr_import::temp_path("upscaled.png");
-                    if resized.save(&tmp).is_ok() {
-                        eprintln!("  upscaled {}x{} → {}x{}", w, img.height(), new_w, new_h);
-                        Some(tmp)
-                    } else {
-                        None
-                    }
+                    let _ = resized.save(&tmp);
+                    (Some(resized.to_rgb8()), Some(tmp), Some(resized))
                 } else {
-                    None
+                    (None, None, Some(img))
                 }
             }
-            Err(_) => None,
+            Err(_) => (None, None, None),
         };
-        let effective_path = ocr_path.as_deref().unwrap_or(path);
 
-        // Run OCR + extract maps before process_page (which may clean up temp files)
-        let ocr_items = ocr_import::ocr_engine::run_full_page(effective_path).ok();
+        // The file path crop rescue will use (upscaled temp or original)
+        let effective_path = upscaled_tmp.as_deref().unwrap_or(path);
+
+        // Run OCR ONCE: use in-memory path for upscaled, file path for original
+        let ocr_items = if let Some(rgb) = upscaled_rgb {
+            ocr_import::ocr_engine::run_full_page_mem(rgb).ok()
+        } else {
+            ocr_import::ocr_engine::run_full_page(effective_path).ok()
+        };
+
+        // Extract maps from the single OCR run
         let map_data = if let Some(ref items) = ocr_items {
-            if let Ok(page_img) = image::open(effective_path) {
+            if let Some(ref pimg) = page_img {
                 if let Some(pt) = ocr_import::printout_detect::detect_printout_type(items) {
                     let pt_str = format!("{:?}", pt);
-                    let maps = ocr_import::extract_maps::extract_maps(&page_img, items, &pt_str);
+                    let maps = ocr_import::extract_maps::extract_maps(pimg, items, &pt_str);
                     if !maps.maps.is_empty() { Some(maps) } else { None }
                 } else { None }
             } else { None }
         } else { None };
 
-        if let Some(result) = ocr_import::process_page(effective_path, path, 1) {
+        // Use the SAME OCR items for field extraction (no second OCR run)
+        let result_opt = if let Some(items) = ocr_items {
+            ocr_import::process_page_with_items(effective_path, path, 1, items)
+        } else {
+            None
+        };
+
+        if let Some(result) = result_opt {
             // Use demographics from OCR header when no DICOM metadata
             let (patient_id, family_name, given_name, dob, eye, exam_date, exam_time) =
                 if let Some(ref demo) = result.demographics {
