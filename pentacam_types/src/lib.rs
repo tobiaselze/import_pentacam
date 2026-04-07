@@ -108,6 +108,7 @@ pub struct PrintoutResult {
     pub fields: HashMap<String, f64>,
     pub confidences: HashMap<String, f32>,
     pub qa_status: QaStatus,
+    pub demographics: Option<PdfDemographics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +124,7 @@ pub struct PdfDemographics {
     pub patient_id: Option<String>,
     pub date_of_birth: Option<String>,
     pub exam_date: Option<String>,
+    pub exam_time: Option<String>,
     pub eye: Option<Laterality>,
 }
 

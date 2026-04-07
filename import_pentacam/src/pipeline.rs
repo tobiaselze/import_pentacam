@@ -647,15 +647,59 @@ impl PentacamPipeline {
         let effective_path = ocr_path.as_deref().unwrap_or(path);
 
         if let Some(result) = ocr_import::process_page(effective_path, path, 1) {
-            let mut row = RawRow {
-                patient_id: String::new(),
-                family_name: String::new(),
-            given_name: String::new(),
-                dob: String::new(),
-                
-                eye: String::new(),
-                exam_date: String::new(),
-                exam_time: String::new(),
+            // Use demographics from OCR header when no DICOM metadata
+            let (patient_id, family_name, given_name, dob, eye, exam_date, exam_time) =
+                if let Some(ref demo) = result.demographics {
+                    let (fam, giv) = if let Some(ref name) = demo.patient_name {
+                        let parts: Vec<&str> = name.splitn(2, '^').collect();
+                        (
+                            parts.first().unwrap_or(&"").to_string(),
+                            parts.get(1).unwrap_or(&"").to_string(),
+                        )
+                    } else {
+                        (String::new(), String::new())
+                    };
+                    let eye_str = match demo.eye {
+                        Some(Laterality::OD) => "OD".to_string(),
+                        Some(Laterality::OS) => "OS".to_string(),
+                        _ => String::new(),
+                    };
+                    (
+                        demo.patient_id.clone().unwrap_or_default(),
+                        fam,
+                        giv,
+                        demo.date_of_birth.clone().unwrap_or_default(),
+                        eye_str,
+                        demo.exam_date.clone().unwrap_or_default(),
+                        demo.exam_time.clone().unwrap_or_default(),
+                    )
+                } else {
+                    (String::new(), String::new(), String::new(), String::new(),
+                     String::new(), String::new(), String::new())
+                };
+
+            // Compute imagedir hash if we have enough metadata
+            let imagedir = if !patient_id.is_empty() && !eye.is_empty() {
+                let lat = if eye == "OD" { Laterality::OD } else { Laterality::OS };
+                let epoch = parse_exam_epoch(&exam_date, &exam_time);
+                let key = pentacam_types::EyeVisitKey {
+                    patient_id: patient_id.clone(),
+                    eye: lat,
+                    exam_epoch_secs: epoch,
+                };
+                key.dir_hash()
+            } else {
+                String::new()
+            };
+
+            let row = RawRow {
+                patient_id,
+                family_name,
+                given_name,
+                dob,
+                eye,
+                exam_date,
+                exam_time,
                 source_folder: folder,
                 source_file: fname.to_string(),
                 page_number: 1,
@@ -667,7 +711,7 @@ impl PentacamPipeline {
                 n_fields: result.fields.len() as u32,
                 device_serial: String::new(),
                 software_version: String::new(),
-                imagedir: String::new(),
+                imagedir,
                 fields: result.fields,
                 confidences: result.confidences.into_iter()
                     .map(|(k, v)| (k, v as f32))

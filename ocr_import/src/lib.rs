@@ -183,6 +183,9 @@ pub fn process_page_with_options(
         confidences.insert(name.clone(), loc.conf);
     }
 
+    // Extract demographics from header (for standalone image/PDF input)
+    let demo = demographics::extract_from_header(&items);
+
     Some(PrintoutResult {
         printout_type,
         source_file: source_file.to_path_buf(),
@@ -190,6 +193,7 @@ pub fn process_page_with_options(
         fields,
         confidences,
         qa_status,
+        demographics: demo,
     })
 }
 
