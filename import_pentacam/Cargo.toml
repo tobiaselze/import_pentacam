@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Tobias Elze <tobias.elze@gmail.com>"]
 description = "Extract clinical measurements from Pentacam DICOM, PDF, and image files"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [package.metadata.wix]
 eula = false
