@@ -5,6 +5,7 @@
 #   make                  Build release binary
 #   make dist             Build + assemble distributable folder
 #   make dist-tar         Build + create .tar.gz archive
+#   make deb              Build + create .deb package
 #   make install          Build + install to PREFIX (default: ~/.local)
 #   make clean            Remove build artifacts and dist folder
 #
@@ -20,12 +21,13 @@ PREFIX         ?= $(HOME)/.local
 
 DIST_DIR   := dist/import_pentacam
 VERSION    := $(shell grep '^version' import_pentacam/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+DEB_PKG    := import-pentacam_$(VERSION)_amd64
 
 # ORT build environment
 export ORT_LIB_LOCATION := $(ORT_DIR)/lib
 export ORT_PREFER_DYNAMIC_LINK := 1
 
-.PHONY: build dist dist-tar install clean check-config
+.PHONY: build dist dist-tar deb install clean check-config
 
 check-config:
 	@if [ ! -f config.mk ]; then \
@@ -77,6 +79,48 @@ dist-tar: dist
 	@echo "Creating archive ..."
 	cd dist && tar czf import_pentacam-$(VERSION)-linux-x64.tar.gz import_pentacam/
 	@echo "Archive: dist/import_pentacam-$(VERSION)-linux-x64.tar.gz"
+
+deb: dist
+	@echo "Building .deb package ..."
+	@rm -rf dist/$(DEB_PKG)
+	@# Directory structure
+	@mkdir -p dist/$(DEB_PKG)/usr/lib/import_pentacam/models
+	@mkdir -p dist/$(DEB_PKG)/usr/bin
+	@mkdir -p dist/$(DEB_PKG)/DEBIAN
+	@# Copy files
+	cp $(DIST_DIR)/import_pentacam dist/$(DEB_PKG)/usr/lib/import_pentacam/
+	cp $(DIST_DIR)/libonnxruntime.so.1.20.1 dist/$(DEB_PKG)/usr/lib/import_pentacam/
+	ln -sf libonnxruntime.so.1.20.1 dist/$(DEB_PKG)/usr/lib/import_pentacam/libonnxruntime.so.1
+	ln -sf libonnxruntime.so.1 dist/$(DEB_PKG)/usr/lib/import_pentacam/libonnxruntime.so
+ifeq ($(CUDA_PROVIDER),1)
+	cp $(DIST_DIR)/libonnxruntime_providers_cuda.so dist/$(DEB_PKG)/usr/lib/import_pentacam/
+	cp $(DIST_DIR)/libonnxruntime_providers_shared.so dist/$(DEB_PKG)/usr/lib/import_pentacam/
+endif
+	cp -r $(DIST_DIR)/models/* dist/$(DEB_PKG)/usr/lib/import_pentacam/models/
+	@# Wrapper script
+	@echo '#!/bin/sh' > dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo 'exec /usr/lib/import_pentacam/import_pentacam "$$@"' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@chmod +x dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@# Control file
+	@INSTALLED_SIZE=$$(du -sk dist/$(DEB_PKG)/usr | cut -f1) && \
+	echo "Package: import-pentacam" > dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Version: $(VERSION)" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Section: science" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Priority: optional" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Architecture: amd64" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Installed-Size: $$INSTALLED_SIZE" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Maintainer: Tobias Elze <tobias.elze@gmail.com>" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Description: Extract clinical measurements from Pentacam DICOM/PDF/image files" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo " Extracts keratometry, pachymetry, and other clinical measurements from" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo " Pentacam ophthalmic imaging files. Supports DICOM Structured Reports," >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo " proprietary SPR binary data, and OCR-based extraction from printout pages." >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo " Outputs CSV files compatible with import_spectralis conventions." >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Suggests: nvidia-driver-535" >> dist/$(DEB_PKG)/DEBIAN/control
+	@# Build .deb
+	dpkg-deb --build --root-owner-group dist/$(DEB_PKG)
+	@echo ""
+	@echo "Package: dist/$(DEB_PKG).deb"
+	@echo "Install: sudo dpkg -i dist/$(DEB_PKG).deb"
 
 install: dist
 	@echo "Installing to $(PREFIX) ..."
