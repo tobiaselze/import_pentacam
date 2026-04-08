@@ -107,6 +107,50 @@ impl ProcessedLog {
 // Pipeline
 // ---------------------------------------------------------------------------
 
+/// CSV input row — parsed from a structured CSV file list.
+struct CsvInputRow {
+    filename: String,
+    patient_id: Option<String>,
+    family_name: Option<String>,
+    given_name: Option<String>,
+    dob: Option<String>,
+    exam_date: Option<String>,
+    exam_time: Option<String>,
+    laterality: Option<String>,
+    printout_type_hint: Option<String>,
+}
+
+/// Metadata from CSV to pass to image processing, avoiding OCR demographics.
+pub struct CsvMeta {
+    pub original_filename: String,
+    pub patient_id: Option<String>,
+    pub family_name: Option<String>,
+    pub given_name: Option<String>,
+    pub dob: Option<String>,
+    pub exam_date: Option<String>,
+    pub exam_time: Option<String>,
+    pub laterality: Option<String>,
+}
+
+impl CsvMeta {
+    /// Check if we have enough metadata to skip demographics OCR.
+    /// Requires at least: id + dob + laterality + exam_date + exam_time.
+    fn has_core_demographics(&self) -> bool {
+        self.patient_id.is_some()
+            && self.dob.is_some()
+            && self.laterality.is_some()
+            && self.exam_date.is_some()
+            && self.exam_time.is_some()
+    }
+}
+
+/// Action to take for a CSV row based on its printout type hint.
+enum CsvPrintoutAction {
+    Process,
+    Skip,
+    DetectFromFile,
+}
+
 /// The main pipeline struct. Holds all stateful resources.
 pub struct PentacamPipeline {
     pub config: PipelineConfig,
@@ -167,10 +211,13 @@ impl PentacamPipeline {
     // Input dispatch
     // -----------------------------------------------------------------------
 
-    /// Process any input: single file, file list (.txt), or directory (PACS mode).
+    /// Process any input: single file, file list (.txt), CSV file list (.csv),
+    /// or directory (PACS mode).
     pub fn process_input(&mut self, input: &Path) {
         if input.is_dir() {
             self.process_pacs_directory(input);
+        } else if input.extension().and_then(|e| e.to_str()) == Some("csv") {
+            self.process_csv_file_list(input);
         } else if input.extension().and_then(|e| e.to_str()) == Some("txt") {
             self.process_file_list(input);
         } else {
@@ -238,6 +285,249 @@ impl PentacamPipeline {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // CSV file list mode
+    // -----------------------------------------------------------------------
+
+    /// Process a CSV file list with optional metadata columns.
+    ///
+    /// Expected CSV header (only `filename` is required):
+    /// `filename,id,dob,examdate,examtime,laterality,printouttype`
+    ///
+    /// Pre-filters rows by printout type before opening files.
+    /// For images, CSV metadata is used in place of OCR demographics when complete.
+    pub fn process_csv_file_list(&mut self, csv_path: &Path) {
+        let rows = match Self::parse_csv_file(csv_path) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("ERROR: Cannot parse CSV {}: {}", csv_path.display(), e);
+                return;
+            }
+        };
+
+        let total = rows.len();
+        eprintln!("CSV file list: {} rows from {}", total, csv_path.display());
+
+        // Load processed-files log for restart support
+        let processed_files_path = self.config.output_dir.join("processed_files.csv");
+        let processed: HashSet<String> = if processed_files_path.exists() {
+            fs::read_to_string(&processed_files_path).unwrap_or_default()
+                .lines().filter(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string()).collect()
+        } else {
+            HashSet::new()
+        };
+
+        let mut processed_log = fs::OpenOptions::new()
+            .create(true).append(true)
+            .open(&processed_files_path)
+            .expect("Cannot open processed_files.csv");
+
+        let t_start = std::time::Instant::now();
+        let mut csv_skipped: u32 = 0;
+
+        for (i, row) in rows.into_iter().enumerate() {
+            // Skip already-processed files (use original filename with ~)
+            if processed.contains(&row.filename) {
+                self.folders_skipped += 1;
+                continue;
+            }
+
+            // Pre-filter by printout type — skip unsupported types without opening file
+            match Self::csv_printout_filter(&row.printout_type_hint) {
+                CsvPrintoutAction::Skip => {
+                    csv_skipped += 1;
+                    // Mark as processed so we don't re-check on restart
+                    let _ = writeln!(processed_log, "{}", row.filename);
+                    let _ = processed_log.flush();
+                    continue;
+                }
+                CsvPrintoutAction::Process | CsvPrintoutAction::DetectFromFile => {}
+            }
+
+            // Resolve path: expand ~ and try _1 suffix
+            let resolved = match Self::resolve_csv_path(&row.filename) {
+                Some(p) => p,
+                None => {
+                    self.error_log.warn(
+                        LogCategory::DicomError,
+                        &row.filename,
+                        "File not found (tried ~ expansion and _1 suffix)",
+                    );
+                    csv_skipped += 1;
+                    let _ = writeln!(processed_log, "{}", row.filename);
+                    let _ = processed_log.flush();
+                    continue;
+                }
+            };
+
+            // Dispatch by file extension
+            let ext = resolved.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            let csv_meta = CsvMeta {
+                original_filename: row.filename.clone(),
+                patient_id: row.patient_id,
+                family_name: row.family_name,
+                given_name: row.given_name,
+                dob: row.dob,
+                exam_date: row.exam_date,
+                exam_time: row.exam_time,
+                laterality: row.laterality,
+            };
+
+            match ext.as_str() {
+                "dcm" => {
+                    // For DICOMs: ignore CSV metadata, use DICOM tags
+                    self.process_dicom(&resolved);
+                }
+                "pdf" => {
+                    self.process_pdf(&resolved);
+                }
+                "png" | "jpg" | "jpeg" | "bmp" | "tif" | "tiff" => {
+                    self.process_image_with_csv(&resolved, Some(&csv_meta));
+                }
+                _ => {
+                    // Try opening as image by magic bytes (handles .JPG_1 etc.)
+                    if image::io::Reader::open(&resolved)
+                        .and_then(|r| r.with_guessed_format())
+                        .ok()
+                        .and_then(|r| r.format())
+                        .is_some()
+                    {
+                        self.process_image_with_csv(&resolved, Some(&csv_meta));
+                    } else {
+                        self.error_log.warn(
+                            LogCategory::DicomError,
+                            &row.filename,
+                            &format!("Unsupported file type: .{}", ext),
+                        );
+                    }
+                }
+            }
+
+            self.flush_pending_rows();
+            self.write_pending_manifests();
+
+            // Mark as processed using original filename (with ~)
+            let _ = writeln!(processed_log, "{}", row.filename);
+            let _ = processed_log.flush();
+
+            if (i + 1) % 100 == 0 || i + 1 == total {
+                eprintln!(
+                    "[{}/{}] {:.1}s, {} rows (skipped {})",
+                    i + 1, total,
+                    t_start.elapsed().as_secs_f64(),
+                    self.total_rows, csv_skipped,
+                );
+            }
+        }
+    }
+
+    /// Parse a CSV file into CsvInputRow structs.
+    /// Detects column indices from header; only `filename` is required.
+    fn parse_csv_file(csv_path: &Path) -> Result<Vec<CsvInputRow>, String> {
+        let mut rdr = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .flexible(true)
+            .from_path(csv_path)
+            .map_err(|e| format!("Open CSV: {}", e))?;
+
+        // Find column indices by name
+        let headers = rdr.headers().map_err(|e| format!("Read headers: {}", e))?.clone();
+        let col = |name: &str| -> Option<usize> {
+            headers.iter().position(|h| h == name)
+        };
+
+        let i_filename = col("filename")
+            .ok_or_else(|| "Missing required column: filename".to_string())?;
+        let i_id = col("id");
+        let i_dob = col("dob");
+        let i_examdate = col("examdate");
+        let i_examtime = col("examtime");
+        let i_laterality = col("laterality");
+        let i_printouttype = col("printouttype");
+        let i_family_name = col("family_name");
+        let i_given_name = col("given_name");
+
+        let get = |record: &csv::StringRecord, idx: Option<usize>| -> Option<String> {
+            idx.and_then(|i| record.get(i))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+
+        let mut rows = Vec::new();
+        for result in rdr.records() {
+            let record = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("  WARNING: Skipping malformed CSV row: {}", e);
+                    continue;
+                }
+            };
+
+            let filename = match record.get(i_filename) {
+                Some(f) if !f.trim().is_empty() => f.trim().to_string(),
+                _ => continue,
+            };
+
+            rows.push(CsvInputRow {
+                filename,
+                patient_id: get(&record, i_id),
+                family_name: get(&record, i_family_name),
+                given_name: get(&record, i_given_name),
+                dob: get(&record, i_dob).map(|d| normalize_csv_date(&d)),
+                exam_date: get(&record, i_examdate).map(|d| normalize_csv_date(&d)),
+                exam_time: get(&record, i_examtime).map(|t| normalize_csv_time(&t)),
+                laterality: get(&record, i_laterality),
+                printout_type_hint: get(&record, i_printouttype),
+            });
+        }
+
+        Ok(rows)
+    }
+
+    /// Determine whether to process or skip a file based on CSV printout type.
+    fn csv_printout_filter(hint: &Option<String>) -> CsvPrintoutAction {
+        match hint.as_deref() {
+            None => CsvPrintoutAction::DetectFromFile,
+            Some("4 Maps Refr") => CsvPrintoutAction::Process,
+            Some("4 Maps Select") => CsvPrintoutAction::Process,
+            Some("Enhanced Ectasia") => CsvPrintoutAction::Process,
+            Some("Topometric") => CsvPrintoutAction::Process,
+            Some("Refractive") => CsvPrintoutAction::Skip,
+            Some(_) => CsvPrintoutAction::Skip, // all other known types unsupported
+        }
+    }
+
+    /// Resolve a CSV filename to an actual file path.
+    /// Expands `~` to $HOME; tries appending `_1` suffix if not found.
+    fn resolve_csv_path(raw: &str) -> Option<PathBuf> {
+        let expanded = if raw.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                PathBuf::from(format!("{}{}", home, &raw[1..]))
+            } else {
+                PathBuf::from(raw)
+            }
+        } else {
+            PathBuf::from(raw)
+        };
+
+        if expanded.exists() {
+            return Some(expanded);
+        }
+
+        // Try _1 suffix (Harmony PACS quirk)
+        let suffixed = PathBuf::from(format!("{}_1", expanded.display()));
+        if suffixed.exists() {
+            return Some(suffixed);
+        }
+
+        None
     }
 
     /// Process a single DICOM, PDF, or image file.
@@ -615,9 +905,16 @@ impl PentacamPipeline {
     }
 
     fn process_image(&mut self, path: &Path) {
-        let fname = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
+        self.process_image_with_csv(path, None);
+    }
+
+    fn process_image_with_csv(&mut self, path: &Path, csv_meta: Option<&CsvMeta>) {
+        // Use original CSV filename for source_file if available
+        let fname = csv_meta.as_ref()
+            .map(|m| m.original_filename.as_str())
+            .unwrap_or_else(|| path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown"));
         let folder = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
 
         // Upscale low-resolution images to ~300 DPI before OCR.
@@ -678,9 +975,69 @@ impl PentacamPipeline {
         };
 
         if let Some(result) = result_opt {
-            // Use demographics from OCR header when no DICOM metadata
+            // Determine demographics: prefer CSV metadata when available,
+            // fall back to OCR header extraction.
             let (patient_id, family_name, given_name, dob, eye, exam_date, exam_time) =
-                if let Some(ref demo) = result.demographics {
+                if let Some(meta) = csv_meta.filter(|m| m.has_core_demographics()) {
+                    // CSV provides core demographics — use them, skip OCR demographics
+                    let fam = if self.config.omit_patient_names {
+                        String::new()
+                    } else {
+                        meta.family_name.clone().unwrap_or_default()
+                    };
+                    let giv = if self.config.omit_patient_names {
+                        String::new()
+                    } else {
+                        meta.given_name.clone().unwrap_or_default()
+                    };
+                    (
+                        meta.patient_id.clone().unwrap_or_default(),
+                        fam,
+                        giv,
+                        meta.dob.clone().unwrap_or_default(),
+                        meta.laterality.clone().unwrap_or_default(),
+                        meta.exam_date.clone().unwrap_or_default(),
+                        meta.exam_time.clone().unwrap_or_default(),
+                    )
+                } else if let Some(meta) = csv_meta {
+                    // CSV has partial metadata — use what we have, fill gaps from OCR
+                    let ocr = result.demographics.as_ref();
+                    let ocr_eye = ocr.and_then(|d| d.eye.as_ref()).map(|e| match e {
+                        Laterality::OD => "OD".to_string(),
+                        Laterality::OS => "OS".to_string(),
+                    });
+                    let (ocr_fam, ocr_giv) = ocr.and_then(|d| d.patient_name.as_ref())
+                        .map(|name| {
+                            let parts: Vec<&str> = name.splitn(2, '^').collect();
+                            (parts.first().unwrap_or(&"").to_string(),
+                             parts.get(1).unwrap_or(&"").to_string())
+                        })
+                        .unwrap_or_default();
+                    let fam = if self.config.omit_patient_names { String::new() }
+                              else { meta.family_name.clone().unwrap_or(ocr_fam) };
+                    let giv = if self.config.omit_patient_names { String::new() }
+                              else { meta.given_name.clone().unwrap_or(ocr_giv) };
+                    (
+                        meta.patient_id.clone()
+                            .or_else(|| ocr.and_then(|d| d.patient_id.clone()))
+                            .unwrap_or_default(),
+                        fam,
+                        giv,
+                        meta.dob.clone()
+                            .or_else(|| ocr.and_then(|d| d.date_of_birth.clone()))
+                            .unwrap_or_default(),
+                        meta.laterality.clone()
+                            .or(ocr_eye)
+                            .unwrap_or_default(),
+                        meta.exam_date.clone()
+                            .or_else(|| ocr.and_then(|d| d.exam_date.clone()))
+                            .unwrap_or_default(),
+                        meta.exam_time.clone()
+                            .or_else(|| ocr.and_then(|d| d.exam_time.clone()))
+                            .unwrap_or_default(),
+                    )
+                } else if let Some(ref demo) = result.demographics {
+                    // No CSV metadata — use OCR demographics
                     let (fam, giv) = if let Some(ref name) = demo.patient_name {
                         let parts: Vec<&str> = name.splitn(2, '^').collect();
                         (
@@ -944,6 +1301,60 @@ impl PentacamPipeline {
         // Clean up temp directory
         ocr_import::cleanup_temp();
     }
+}
+
+/// Normalize a date from CSV to YYYYMMDD.
+/// Accepts: YYYY-MM-DD, MM/DD/YYYY, YYYYMMDD.
+fn normalize_csv_date(s: &str) -> String {
+    let s = s.trim();
+
+    // YYYY-MM-DD
+    if s.len() == 10 && s.chars().nth(4) == Some('-') {
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() == 3 {
+            if let (Ok(y), Ok(m), Ok(d)) = (
+                parts[0].parse::<u32>(),
+                parts[1].parse::<u32>(),
+                parts[2].parse::<u32>(),
+            ) {
+                return format!("{:04}{:02}{:02}", y, m, d);
+            }
+        }
+    }
+
+    // MM/DD/YYYY
+    if s.contains('/') {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 3 {
+            if let (Ok(m), Ok(d), Ok(y)) = (
+                parts[0].parse::<u32>(),
+                parts[1].parse::<u32>(),
+                parts[2].parse::<u32>(),
+            ) {
+                if y > 1900 {
+                    return format!("{:04}{:02}{:02}", y, m, d);
+                }
+            }
+        }
+    }
+
+    // Already YYYYMMDD
+    if s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
+        return s.to_string();
+    }
+
+    s.to_string()
+}
+
+/// Normalize a time string to HHMMSS. Removes colons/dots.
+fn normalize_csv_time(s: &str) -> String {
+    let s = s.trim();
+    // Already HHMMSS (6 digits)
+    if s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()) {
+        return s.to_string();
+    }
+    // HH:MM:SS → HHMMSS
+    s.replace(':', "").replace('.', "")
 }
 
 /// Parse exam date + time into epoch seconds (best effort).

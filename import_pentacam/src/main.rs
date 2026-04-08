@@ -3,6 +3,7 @@
 //! Input modes:
 //!   - Single file (DICOM, PDF, image)
 //!   - File list (.txt with one path per line)
+//!   - CSV file list (.csv with metadata columns)
 //!   - PACS directory (recursive scan for Pentacam DICOMs)
 //!
 //! Output:
@@ -28,7 +29,8 @@ use pipeline::{PipelineConfig, PentacamPipeline};
 #[command(about = "Extract clinical measurements from Pentacam DICOM/PDF/image files")]
 #[command(version)]
 struct Args {
-    /// DICOM file, PDF file, image file, file list (.txt), or PACS directory
+    /// DICOM file, PDF file, image file, file list (.txt), CSV file list (.csv),
+    /// or PACS directory
     input: PathBuf,
 
     /// Output directory for results and extracted images
