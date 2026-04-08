@@ -41,12 +41,41 @@ to ~300 DPI with Lanczos3 before OCR.
 
 OUTPUT:
 
+  A single Pentacam scan may produce multiple data sources: a DICOM Structured
+  Report (SR), a proprietary binary readout (SPR), and OCR readings from one or
+  more printout pages (4Maps, Belin, Topometric). These are first written as
+  individual rows to the raw CSV, then merged per eye-visit into two summary
+  CSVs:
+
   pentacam_raw.csv       One row per extraction event (SR, SPR, or OCR page).
-                         Written incrementally — survives interruptions.
-  pentacam_compact.csv   One row per eye-visit, best value per field.
-  pentacam_detailed.csv  One row per eye-visit, full per-field metadata
-                         (value, source, confidence, reliability, flag).
-  images/<hash>/         Extracted map images and source manifest per scan.
+                         Contains all extracted field values and per-field OCR
+                         confidence scores. Written incrementally during
+                         processing — survives interruptions.
+
+  pentacam_compact.csv   One row per eye-visit (patient + eye + exam date),
+                         with only the best value per field. Ready for clinical
+                         analysis — import directly into R or pandas. Use
+                         --no-compact to skip generation.
+
+  pentacam_detailed.csv  One row per eye-visit, like compact, but with five
+                         columns per field: value, source (SR/SPR/OCR type),
+                         OCR confidence, field reliability score, and a flag
+                         (SR_OCR_MISMATCH, REVIEW, or LOW_CONF). Intended for
+                         quality assurance and research. Use --no-detailed to
+                         skip generation.
+
+  The best value per field is selected by priority: SR > SPR > highest-
+  confidence OCR (exception: HWTW prefers SPR > SR > OCR). When SR and OCR
+  disagree beyond a field-specific threshold, the SR_OCR_MISMATCH flag is set
+  in the detailed CSV.
+
+  images/<hash>/         Extracted map images (4Maps 2x2 grid, Belin elevation/
+                         thickness/charts) and a sources.csv manifest linking
+                         back to the raw data. Each eye-visit gets its own
+                         directory named by a 16-char hash. Use --no-images to
+                         skip image extraction, --save-pages to also save full
+                         rendered printout pages (may contain PII).
+
   processed_files.csv    Restart log for file list / CSV mode.
   processed_folders.csv  Restart log for PACS directory mode.
   errors.log             Structured warnings and errors.
