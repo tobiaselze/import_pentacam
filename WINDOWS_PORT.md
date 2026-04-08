@@ -4,11 +4,58 @@ This document contains everything needed to port `import_pentacam` to Windows.
 It is written for a fresh development environment (or AI assistant) that has
 not seen the Linux development history.
 
+## Port Status: COMPLETE (2026-04-08)
+
+The Windows port has been completed. The binary compiles and runs on Windows
+x86_64 with MSVC. All changes are backward-compatible with Linux.
+
+### What Was Done
+
+| Item | Status | Details |
+|------|--------|---------|
+| Temp file paths | Already done | `ocr_import/src/lib.rs` already used `std::env::temp_dir()` |
+| MuPDF compilation | FIXED | Patched `max_align_t` missing from MSVC bindgen output (see `patches/mupdf-0.6.0/`) |
+| ONNX Runtime | FIXED | `configure` downloads win-x64 .zip on Windows |
+| Tilde expansion | FIXED | `pipeline.rs` now falls back to `USERPROFILE` if `HOME` is unset |
+| Build system | FIXED | `configure` detects Windows, LLVM, MSVC; `Makefile` handles .exe/.dll |
+| LIBCLANG_PATH | FIXED | `configure` auto-detects LLVM and writes `LIBCLANG_PATH` to `config.mk` |
+| Path handling | NOT NEEDED | `render.rs` uses `temp_path()`, processed_files.csv uses consistent string keys |
+| Poppler on Windows | NOT NEEDED | MuPDF is default renderer; Poppler subprocess calls work if installed |
+
+### Prerequisites for Windows Build
+
+1. Rust (MSVC toolchain, the default on Windows) — https://rustup.rs
+2. Git for Windows (includes Git Bash) — https://git-scm.com
+3. Visual Studio Build Tools with "Desktop development with C++" workload
+4. LLVM (provides libclang.dll for bindgen) — install from
+   https://github.com/llvm/llvm-project/releases (the LLVM-*-win64.exe package)
+
+### Build Commands (Git Bash)
+
+```bash
+./configure --cpu-only    # or omit --cpu-only for GPU support
+make dist                 # requires make; see INSTALL for manual alternative
+```
+
+### Output
+
+```
+dist/import_pentacam/
+  import_pentacam.exe
+  onnxruntime.dll
+  models/
+    pp-ocrv5_server_det.onnx
+    en_pp-ocrv5_mobile_rec.onnx
+    en_ppocrv5_dict.txt
+```
+
+---
+
 ## Project Overview
 
 `import_pentacam` extracts clinical measurements from Pentacam ophthalmic
 DICOM, PDF, and image files using OCR. It produces CSV output compatible with
-`import_spectralis`. It runs on Linux and needs to be ported to Windows.
+`import_spectralis`. It runs on Linux and Windows.
 
 **Repo**: https://github.com/tobiaselze/import_pentacam (private)
 
@@ -28,217 +75,80 @@ import_pentacam/    Production binary with CLI
 
 Key dependencies:
 - `oar-ocr` 0.6 — PaddleOCR wrapper using ONNX Runtime for inference
-- `mupdf` 0.6 — MuPDF wrapper for PDF rendering (C library)
+- `mupdf` 0.6 — MuPDF wrapper for PDF rendering (C library, patched for Windows)
 - `image` 0.25 — Image loading, resizing (pure Rust)
 - `clap` — CLI argument parsing
 - `chrono` — Date/time handling
 - `blake3` — Hashing for image directory names
 - `walkdir` — Directory traversal
 
-## Current Linux Build System
+## Current Build System
 
 ```bash
 ./configure              # Downloads ORT + OCR models, detects CUDA, writes config.mk
 make                     # Builds release binary
 make dist                # Assembles self-contained dist/ folder
-make deb                 # Creates .deb package
-make install             # Installs to ~/.local
+make dist-tar            # Creates .tar.gz (Linux) or .zip (Windows) archive
+make deb                 # Creates .deb package (Linux only)
+make install             # Installs to ~/.local (Linux) or PREFIX (Windows)
 ```
 
-The binary uses RUNPATH=$ORIGIN to find .so files next to itself. On Windows,
-DLLs next to .exe are found automatically — this is actually easier.
+The binary uses RUNPATH=$ORIGIN on Linux to find .so files next to itself.
+On Windows, DLLs next to .exe are found automatically.
 
-## What Needs to Change for Windows
+## Changes Made for Windows
 
-### 1. Temp File Paths (EASY — do this first)
+### 1. MuPDF max_align_t Patch
 
-**File**: `ocr_import/src/lib.rs`
+**Files**: `patches/mupdf-0.6.0/src/device/native.rs`, `Cargo.toml`
 
-Currently hardcodes Linux temp path:
-```rust
-lazy_static! {
-    static ref TEMP_DIR: PathBuf = {
-        let dir = PathBuf::from(format!("/tmp/pentacam_ocr_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
-        dir
-    };
-}
-```
+The `mupdf` crate v0.6 uses `max_align_t` from bindgen-generated FFI
+bindings. On MSVC, bindgen does not emit this type because MSVC headers
+handle `max_align_t` differently (it's a compiler intrinsic, not a typedef).
 
-**Fix**: Use `std::env::temp_dir()`:
-```rust
-let dir = std::env::temp_dir().join(format!("pentacam_ocr_{}", std::process::id()));
-```
+**Fix**: Added a `#[cfg(windows)]` stand-in struct with `f64` alignment (8
+bytes, matching x86_64 MSVC max fundamental alignment). Applied via
+`[patch.crates-io]` in the workspace `Cargo.toml`. The `#[cfg]` gate ensures
+zero impact on Linux builds.
 
-This returns `C:\Users\<user>\AppData\Local\Temp` on Windows, `/tmp` on Linux.
+### 2. Configure Script — Windows Detection
 
-Also check `ocr_import/src/render.rs` for any hardcoded `/tmp` paths.
+**File**: `configure`
 
-### 2. MuPDF Compilation (HARD — main blocker)
+- Detects MINGW/MSYS/CYGWIN as Windows
+- Downloads `onnxruntime-win-x64-*.zip` instead of `-linux-*.tgz`
+- Uses `unzip` instead of `tar xz` for extraction
+- Detects MSVC (`cl.exe`), CMake, and LLVM (`libclang.dll`)
+- Writes `LIBCLANG_PATH` to `config.mk` for bindgen
 
-The `mupdf` crate (version 0.6) wraps the MuPDF C library. It uses a build
-script that compiles MuPDF from source. On Windows, this requires:
+### 3. Makefile — Cross-Platform dist/install
 
-- MSVC (Visual Studio Build Tools) with C/C++ workload
-- Or MinGW-w64 GCC
+**File**: `Makefile`
 
-The mupdf crate's build.rs should handle Windows, but may need:
-- CMake installed and in PATH
-- Correct MSVC environment (run from "Developer Command Prompt" or set up vcvars)
+- Detects Windows via `uname -s` pattern matching
+- Copies `.exe` + `.dll` on Windows instead of ELF + `.so` + symlinks
+- `dist-tar` creates `.zip` on Windows
+- `install` uses flat directory layout on Windows (no wrapper script)
+- `deb` target errors on Windows with clear message
 
-**If MuPDF compilation fails**, we have a fallback: the `--poppler` flag uses
-`pdftoppm` (Poppler) for PDF rendering via subprocess. Poppler is available
-for Windows. As a last resort, we could make MuPDF optional:
-```toml
-[dependencies]
-mupdf = { version = "0.6", optional = true }
+### 4. Tilde Expansion — USERPROFILE Fallback
 
-[features]
-default = ["mupdf"]
-```
+**File**: `import_pentacam/src/pipeline.rs`
 
-But most input files are DICOMs (which embed PDFs) or images, so PDF rendering
-is needed for the core workflow.
+`resolve_csv_path()` now tries `USERPROFILE` if `HOME` is unset. On Linux,
+`HOME` is always set so the fallback never triggers.
 
-### 3. ONNX Runtime for Windows
+## Files That Needed Changes
 
-Download from: https://github.com/microsoft/onnxruntime/releases
+| File | What changed |
+|------|-------------|
+| `configure` | Windows platform detection, ORT download, LLVM detection |
+| `Makefile` | Windows dist/install targets, .exe/.dll handling |
+| `Cargo.toml` | `[patch.crates-io]` for mupdf Windows fix |
+| `patches/mupdf-0.6.0/src/device/native.rs` | `max_align_t` stand-in for MSVC |
+| `import_pentacam/src/pipeline.rs` | `USERPROFILE` fallback for tilde expansion |
 
-- CPU: `onnxruntime-win-x64-1.20.1.zip`
-- GPU: `onnxruntime-win-x64-gpu-1.20.1.zip`
-
-The build needs:
-```
-ORT_LIB_LOCATION=C:\path\to\onnxruntime\lib
-ORT_PREFER_DYNAMIC_LINK=1
-```
-
-For distribution, place next to .exe:
-```
-import_pentacam.exe
-onnxruntime.dll
-onnxruntime_providers_cuda.dll      (GPU only)
-onnxruntime_providers_shared.dll    (GPU only)
-models/
-  pp-ocrv5_server_det.onnx
-  en_pp-ocrv5_mobile_rec.onnx
-  en_ppocrv5_dict.txt
-```
-
-Windows finds DLLs next to the .exe automatically — no RUNPATH equivalent needed.
-
-### 4. Path Handling
-
-**Tilde expansion** (`~/`): Used in CSV input mode. On Windows, `~` isn't a
-shell concept. The code in `pipeline.rs` `resolve_csv_path()` expands it via
-`$HOME` env var. On Windows, use `USERPROFILE` instead:
-
-```rust
-let expanded = if raw.starts_with("~/") {
-    if let Ok(home) = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-    {
-        PathBuf::from(format!("{}{}", home, &raw[1..]))
-    } else {
-        PathBuf::from(raw)
-    }
-} else {
-    PathBuf::from(raw)
-};
-```
-
-**PACS directory prefix**: Linux uses `1.3.6.1.4.1.34714.` to identify
-Pentacam DICOM files by filename. This should work on Windows too (it's just
-a string prefix check on filenames).
-
-**Backslashes in CSV**: The CSV `filename` column may contain Windows paths
-with backslashes. The `Path` type handles this, but string matching for
-`processed_files.csv` restart needs to be consistent.
-
-### 5. Build Script / Installer for Windows
-
-The `./configure` bash script won't run natively on Windows (needs Git Bash).
-Options:
-
-a. **Git Bash** (recommended for developers): Already documented in INSTALL.
-   `./configure` and `make` work in Git Bash.
-
-b. **PowerShell script**: `configure.ps1` equivalent for native Windows builds.
-   Lower priority — Git Bash is sufficient.
-
-c. **MSI installer**: For end-user distribution. Can be created with
-   [WiX Toolset](https://wixtoolset.org/) or cargo-wix. Would install to
-   `C:\Program Files\import_pentacam\` with PATH entry.
-
-d. **Self-extracting exe**: Bundle everything with `include_bytes!` in a Rust
-   installer binary. Cross-platform approach.
-
-For the first Windows build, just use Git Bash + make. Installer later.
-
-### 6. Poppler on Windows
-
-If `--poppler` is used, the binary calls `pdftoppm` via subprocess. On Windows,
-Poppler binaries are available from:
-https://github.com/oschwartz10612/poppler-windows/releases
-
-The user would need to install it and add to PATH. Since MuPDF is the default
-renderer, this is only needed as a fallback.
-
-### 7. CUDA on Windows
-
-ONNX Runtime CUDA provider works on Windows with:
-- NVIDIA GPU driver installed
-- CUDA Toolkit (matching the ORT version's CUDA requirement)
-- cuDNN
-
-The ORT Windows GPU package bundles its own CUDA runtime, so typically just
-the NVIDIA driver is needed. Same as Linux — GPU is optional, CPU fallback
-works everywhere.
-
-## Step-by-Step Build Instructions for Windows
-
-### Prerequisites
-
-1. Install [Rust](https://rustup.rs) (use MSVC toolchain, the default on Windows)
-2. Install [Git for Windows](https://git-scm.com) (includes Git Bash)
-3. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
-   with "Desktop development with C++" workload (needed for MuPDF)
-4. Install [CMake](https://cmake.org/download/) and add to PATH
-
-### Build
-
-Open Git Bash:
-```bash
-git clone git@github.com:tobiaselze/import_pentacam.git
-cd import_pentacam
-./configure --cpu-only    # Start with CPU-only (simpler)
-make dist
-```
-
-If MuPDF fails to compile, try:
-1. Run from "Developer Command Prompt for VS" instead of plain Git Bash
-2. Ensure CMake is in PATH: `cmake --version`
-3. Check that `cl.exe` (MSVC compiler) is accessible
-
-### Test
-```
-cd dist/import_pentacam
-./import_pentacam.exe --help
-```
-
-## Files Most Likely to Need Changes
-
-| File | What to change |
-|------|---------------|
-| `ocr_import/src/lib.rs` | Temp dir path (use `std::env::temp_dir()`) |
-| `ocr_import/src/render.rs` | PDF rendering temp files, subprocess calls |
-| `import_pentacam/src/pipeline.rs` | Tilde expansion (add USERPROFILE fallback) |
-| `import_pentacam/src/pipeline.rs` | Path separator handling in CSV restart log |
-| `Makefile` | Windows dist target (.exe, .dll instead of .so) |
-| `configure` | Windows ORT download URL (zip instead of tgz) |
-| `ocr_import/Cargo.toml` | Possibly make mupdf optional if it won't compile |
-
-## Files That Should Work As-Is
+## Files That Worked As-Is
 
 | File | Why |
 |------|-----|
@@ -247,6 +157,8 @@ cd dist/import_pentacam
 | `import_pentacam/src/raw_csv.rs` | Pure Rust I/O |
 | `import_pentacam/src/field_map.rs` | Constants only |
 | `import_pentacam/src/logging.rs` | Pure Rust I/O |
+| `ocr_import/src/lib.rs` | Already used `std::env::temp_dir()` |
+| `ocr_import/src/render.rs` | Uses `temp_path()`, subprocess calls are cross-platform |
 | `ocr_import/src/belin.rs` | Pure Rust math |
 | `ocr_import/src/field_locate.rs` | Pure Rust math |
 | `ocr_import/src/label_match.rs` | Pure Rust |
@@ -292,10 +204,11 @@ Expected output: `pentacam_raw.csv`, `pentacam_compact.csv`,
   watch for "file in use" errors if the output CSV is open in Excel.
 - **Console encoding**: OCR model paths with non-ASCII characters. Use UTF-8
   everywhere (Rust default).
+- **make not in Git Bash**: Git Bash doesn't include `make` by default.
+  Install via MSYS2 (`pacman -S make`) or use the manual build steps in INSTALL.
 
-## After the Port Works
+## Future Improvements
 
-1. Add Windows dist target to Makefile (copies .exe + .dll + models)
-2. Create MSI or self-extracting installer for end users
-3. Set up GitHub Actions CI for automated Windows builds
-4. Test with PACS data accessible from Windows (SAMBA mount or local copy)
+1. MSI or self-extracting installer for end-user distribution
+2. GitHub Actions CI for automated Windows builds
+3. Test with PACS data accessible from Windows (SAMBA mount or local copy)

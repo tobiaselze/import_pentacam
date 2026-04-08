@@ -7,3 +7,6 @@ members = [
     "blob_import",
 ]
 resolver = "2"
+
+[patch.crates-io]
+mupdf = { path = "patches/mupdf-0.6.0" }

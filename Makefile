@@ -4,8 +4,8 @@
 #   ./configure           One-time setup (downloads ONNX Runtime, detects CUDA)
 #   make                  Build release binary
 #   make dist             Build + assemble distributable folder
-#   make dist-tar         Build + create .tar.gz archive
-#   make deb              Build + create .deb package
+#   make dist-tar         Build + create .tar.gz / .zip archive
+#   make deb              Build + create .deb package (Linux only)
 #   make install          Build + install to PREFIX (default: ~/.local)
 #   make clean            Remove build artifacts and dist folder
 #
@@ -26,6 +26,17 @@ DEB_PKG    := import-pentacam_$(VERSION)_amd64
 # ORT build environment
 export ORT_LIB_LOCATION := $(ORT_DIR)/lib
 export ORT_PREFER_DYNAMIC_LINK := 1
+
+# Detect platform: MINGW/MSYS/CYGWIN = Windows
+IS_WINDOWS := $(if $(filter MINGW% MSYS% CYGWIN%,$(shell uname -s)),1,0)
+
+ifeq ($(IS_WINDOWS),1)
+    EXE_EXT := .exe
+    BIN_NAME := import_pentacam.exe
+else
+    EXE_EXT :=
+    BIN_NAME := import_pentacam
+endif
 
 .PHONY: build dist dist-tar deb install clean check-config
 
@@ -50,15 +61,23 @@ dist: build
 	@rm -rf $(DIST_DIR)
 	@mkdir -p $(DIST_DIR)/models
 	@# Binary
-	cp target/release/import_pentacam $(DIST_DIR)/
-	@# ORT core library
+	cp target/release/$(BIN_NAME) $(DIST_DIR)/
+ifeq ($(IS_WINDOWS),1)
+	@# ORT DLLs (Windows — DLLs next to .exe are found automatically)
+	cp $(ORT_DIR)/lib/onnxruntime.dll $(DIST_DIR)/
+ifeq ($(CUDA_PROVIDER),1)
+	cp $(ORT_DIR)/lib/onnxruntime_providers_cuda.dll $(DIST_DIR)/
+	cp $(ORT_DIR)/lib/onnxruntime_providers_shared.dll $(DIST_DIR)/
+endif
+else
+	@# ORT shared libs (Linux — uses RUNPATH=$$ORIGIN)
 	cp $(ORT_DIR)/lib/libonnxruntime.so.1.20.1 $(DIST_DIR)/
 	ln -sf libonnxruntime.so.1.20.1 $(DIST_DIR)/libonnxruntime.so.1
 	ln -sf libonnxruntime.so.1 $(DIST_DIR)/libonnxruntime.so
 ifeq ($(CUDA_PROVIDER),1)
-	@# GPU providers (optional — binary falls back to CPU if missing)
 	cp $(ORT_DIR)/lib/libonnxruntime_providers_cuda.so $(DIST_DIR)/
 	cp $(ORT_DIR)/lib/libonnxruntime_providers_shared.so $(DIST_DIR)/
+endif
 endif
 	@# OCR models
 	cp models/pp-ocrv5_server_det.onnx $(DIST_DIR)/models/
@@ -66,21 +85,41 @@ endif
 	cp models/en_ppocrv5_dict.txt $(DIST_DIR)/models/
 	@echo ""
 	@echo "Distribution ready: $(DIST_DIR)/"
-	@echo "  Binary:  $(DIST_DIR)/import_pentacam"
+	@echo "  Binary:  $(DIST_DIR)/$(BIN_NAME)"
 	@echo "  Models:  $(DIST_DIR)/models/"
+ifeq ($(IS_WINDOWS),1)
+	@echo "  ORT:     $(DIST_DIR)/onnxruntime.dll"
+else
 	@echo "  ORT:     $(DIST_DIR)/libonnxruntime.so.1.20.1"
+endif
 ifeq ($(CUDA_PROVIDER),1)
+ifeq ($(IS_WINDOWS),1)
+	@echo "  GPU:     $(DIST_DIR)/onnxruntime_providers_cuda.dll"
+else
 	@echo "  GPU:     $(DIST_DIR)/libonnxruntime_providers_cuda.so"
 endif
+endif
 	@echo ""
-	@echo "Test:  cd $(DIST_DIR) && ./import_pentacam --help"
+	@echo "Test:  cd $(DIST_DIR) && ./$(BIN_NAME) --help"
 
 dist-tar: dist
+ifeq ($(IS_WINDOWS),1)
+	@echo "Creating archive ..."
+	cd dist && 7z a -tzip import_pentacam-$(VERSION)-win-x64.zip import_pentacam/ > /dev/null 2>&1 || \
+		(cd dist && powershell -Command "Compress-Archive -Path import_pentacam -DestinationPath import_pentacam-$(VERSION)-win-x64.zip -Force") || \
+		(cd dist && zip -r import_pentacam-$(VERSION)-win-x64.zip import_pentacam/)
+	@echo "Archive: dist/import_pentacam-$(VERSION)-win-x64.zip"
+else
 	@echo "Creating archive ..."
 	cd dist && tar czf import_pentacam-$(VERSION)-linux-x64.tar.gz import_pentacam/
 	@echo "Archive: dist/import_pentacam-$(VERSION)-linux-x64.tar.gz"
+endif
 
 deb: dist
+ifeq ($(IS_WINDOWS),1)
+	@echo "ERROR: .deb packages are only supported on Linux."
+	@exit 1
+endif
 	@echo "Building .deb package ..."
 	@rm -rf dist/$(DEB_PKG)
 	@# Directory structure
@@ -123,6 +162,16 @@ endif
 	@echo "Install: sudo dpkg -i dist/$(DEB_PKG).deb"
 
 install: dist
+ifeq ($(IS_WINDOWS),1)
+	@echo "Installing to $(PREFIX) ..."
+	@mkdir -p "$(PREFIX)/import_pentacam/models"
+	cp $(DIST_DIR)/$(BIN_NAME) "$(PREFIX)/import_pentacam/"
+	cp $(DIST_DIR)/onnxruntime*.dll "$(PREFIX)/import_pentacam/"
+	cp -r $(DIST_DIR)/models/* "$(PREFIX)/import_pentacam/models/"
+	@echo ""
+	@echo "Installed to $(PREFIX)/import_pentacam/"
+	@echo "Add $(PREFIX)/import_pentacam to your PATH."
+else
 	@echo "Installing to $(PREFIX) ..."
 	@mkdir -p $(PREFIX)/lib/import_pentacam/models
 	@mkdir -p $(PREFIX)/bin
@@ -138,6 +187,7 @@ install: dist
 	@echo "Wrapper:  $(PREFIX)/bin/import_pentacam"
 	@echo ""
 	@echo "Make sure $(PREFIX)/bin is in your PATH."
+endif
 
 clean:
 	cargo clean

@@ -1,8 +1,8 @@
 INSTALL — import_pentacam
 =========================
 
-Prerequisites
--------------
+Prerequisites (Linux)
+---------------------
 
 - Rust toolchain (install via https://rustup.rs)
 - Linux x86_64 (Ubuntu 22.04+ or equivalent, glibc >= 2.35)
@@ -10,8 +10,21 @@ Prerequisites
 - Internet connection (first build only — downloads ONNX Runtime and OCR models)
 - Optional: NVIDIA GPU with CUDA drivers for GPU acceleration
 
-Quick Start
------------
+Prerequisites (Windows)
+-----------------------
+
+- Rust toolchain (install via https://rustup.rs — uses MSVC toolchain by default)
+- Git for Windows (https://git-scm.com — includes Git Bash)
+- Visual Studio Build Tools (https://visualstudio.microsoft.com/downloads/)
+  with "Desktop development with C++" workload
+- LLVM (https://github.com/llvm/llvm-project/releases — install the
+  LLVM-*-win64.exe package; needed for MuPDF FFI binding generation)
+- curl (bundled with Git Bash)
+- Internet connection (first build only — downloads ONNX Runtime and OCR models)
+- Optional: NVIDIA GPU with CUDA drivers for GPU acceleration
+
+Quick Start (Linux)
+-------------------
 
     ./configure
     make install
@@ -26,6 +39,43 @@ After installation, run:
 
     import_pentacam --help
 
+Quick Start (Windows)
+---------------------
+
+Open Git Bash:
+
+    ./configure --cpu-only       # or omit --cpu-only if you have an NVIDIA GPU
+    make dist
+
+This will:
+1. Detect Windows and download the correct ONNX Runtime (win-x64 .zip)
+2. Download PaddleOCR v5 models (~100 MB)
+3. Detect LLVM/libclang for MuPDF binding generation
+4. Build the release binary (.exe)
+5. Assemble dist/import_pentacam/ with .exe, .dll, and models
+
+After building, test:
+
+    cd dist/import_pentacam
+    ./import_pentacam.exe --help
+
+Note: `make` may not be installed in Git Bash by default. If not, you can
+build manually:
+
+    # After running ./configure, extract variables from config.mk:
+    ORT_DIR=$(grep '^ORT_DIR' config.mk | sed 's/.*:= //')
+    export ORT_LIB_LOCATION="$ORT_DIR/lib"
+    export ORT_PREFER_DYNAMIC_LINK=1
+    export LIBCLANG_PATH="C:/Program Files/LLVM/bin"   # adjust if installed elsewhere
+    cargo build --release
+
+Then assemble the distribution folder:
+
+    mkdir -p dist/import_pentacam/models
+    cp target/release/import_pentacam.exe dist/import_pentacam/
+    cp "$ORT_DIR"/lib/onnxruntime.dll dist/import_pentacam/
+    cp models/*.onnx models/*.txt dist/import_pentacam/models/
+
 Configure Options
 -----------------
 
@@ -34,18 +84,25 @@ Configure Options
     ./configure --ort-dir DIR      Use an existing ONNX Runtime installation
     ./configure --prefix DIR       Install to DIR instead of ~/.local
 
+The configure script works identically on Linux and Windows (Git Bash). On
+Windows it automatically:
+- Downloads the win-x64 ORT package (.zip) instead of linux-x64 (.tgz)
+- Detects MSVC (cl.exe) and CMake availability
+- Locates LLVM/libclang and writes LIBCLANG_PATH to config.mk
+
 Make Targets
 ------------
 
     make                Build release binary only
     make dist           Build + assemble dist/import_pentacam/ with all
                         libraries and models (portable, self-contained)
-    make dist-tar       Build + create .tar.gz archive for distribution
+    make dist-tar       Build + create archive (.tar.gz on Linux, .zip on Windows)
+    make deb            Build + create .deb package (Linux only)
     make install        Build + install to PREFIX (default: ~/.local)
     make clean          Remove build artifacts
 
-Distributing
-------------
+Distributing (Linux)
+--------------------
 
 After `make dist`, the dist/import_pentacam/ folder is fully self-contained.
 Copy it to any Linux x86_64 machine and run directly — no installation or
@@ -57,8 +114,26 @@ environment variables needed:
 For GPU support, the target machine needs NVIDIA CUDA drivers installed
 (the CUDA runtime libraries are bundled).
 
-System-wide Installation (as root)
-----------------------------------
+Distributing (Windows)
+----------------------
+
+After `make dist`, the dist/import_pentacam/ folder contains:
+
+    import_pentacam.exe
+    onnxruntime.dll
+    models/
+      pp-ocrv5_server_det.onnx
+      en_pp-ocrv5_mobile_rec.onnx
+      en_ppocrv5_dict.txt
+
+Copy this folder to any Windows x86_64 machine. Windows automatically finds
+DLLs next to the .exe — no PATH or environment configuration needed.
+
+For GPU builds, onnxruntime_providers_cuda.dll and
+onnxruntime_providers_shared.dll are also included.
+
+System-wide Installation (Linux, as root)
+-----------------------------------------
 
     ./configure --prefix /usr/local
     sudo make install
@@ -66,35 +141,24 @@ System-wide Installation (as root)
 This installs to /usr/local/lib/import_pentacam/ with a wrapper script
 in /usr/local/bin/.
 
-Windows
--------
+MuPDF Patch (Windows)
+---------------------
 
-Windows builds are not yet automated but the source code is cross-platform.
-To build on Windows:
-
-1. Install Rust via https://rustup.rs
-2. Install Git for Windows (https://git-scm.com) which includes Git Bash
-3. Open Git Bash and run:
-
-       ./configure --cpu-only
-       make dist
-
-   For GPU support, manually download ONNX Runtime for Windows from
-   https://github.com/microsoft/onnxruntime/releases and pass its path:
-
-       ./configure --ort-dir /c/path/to/onnxruntime
-
-   Note: The configure script and Makefile require a bash-compatible shell
-   (Git Bash, WSL, or MSYS2). They do not run in PowerShell or CMD directly.
+The mupdf crate (v0.6) has a build issue on Windows: bindgen does not
+generate the `max_align_t` type from MSVC headers. This repo includes a
+patched copy in patches/mupdf-0.6.0/ that provides a Windows-only stand-in.
+The patch is applied via [patch.crates-io] in Cargo.toml and has no effect
+on Linux builds (gated behind #[cfg(windows)]).
 
 Notes
 -----
 
 - ONNX Runtime is downloaded to ort/ in the source directory. OCR models
   are downloaded to models/. Both are preserved across clean builds.
-- The binary uses RUNPATH=$ORIGIN to find its shared libraries relative
-  to itself. No LD_LIBRARY_PATH configuration is needed.
+- On Linux, the binary uses RUNPATH=$ORIGIN to find its shared libraries
+  relative to itself. No LD_LIBRARY_PATH configuration is needed.
+- On Windows, DLLs next to the .exe are found automatically by the OS.
 - OCR models and ONNX Runtime libraries must be in the same relative
-  location as the binary (models/ subdirectory, .so files alongside).
+  location as the binary (models/ subdirectory, .so/.dll files alongside).
 - GPU memory: expect ~8-34 GB VRAM usage during OCR. The software falls
   back to CPU if GPU is unavailable or runs out of memory.

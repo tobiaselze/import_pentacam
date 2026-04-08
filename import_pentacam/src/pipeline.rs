@@ -510,7 +510,9 @@ impl PentacamPipeline {
     /// Expands `~` to $HOME; tries appending `_1` suffix if not found.
     fn resolve_csv_path(raw: &str) -> Option<PathBuf> {
         let expanded = if raw.starts_with("~/") {
-            if let Ok(home) = std::env::var("HOME") {
+            if let Ok(home) = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+            {
                 PathBuf::from(format!("{}{}", home, &raw[1..]))
             } else {
                 PathBuf::from(raw)
