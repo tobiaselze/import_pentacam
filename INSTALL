@@ -6,7 +6,8 @@ Prerequisites
 
 - Rust toolchain (install via https://rustup.rs)
 - Linux x86_64 (Ubuntu 22.04+ or equivalent, glibc >= 2.35)
-- Internet connection (for downloading ONNX Runtime)
+- curl (for downloading dependencies)
+- Internet connection (first build only — downloads ONNX Runtime and OCR models)
 - Optional: NVIDIA GPU with CUDA drivers for GPU acceleration
 
 Quick Start
@@ -17,8 +18,9 @@ Quick Start
 
 This will:
 1. Download ONNX Runtime (GPU version if CUDA is detected, CPU otherwise)
-2. Build the release binary
-3. Install to ~/.local/lib/import_pentacam/ with a wrapper in ~/.local/bin/
+2. Download PaddleOCR v5 models (~100 MB)
+3. Build the release binary
+4. Install to ~/.local/lib/import_pentacam/ with a wrapper in ~/.local/bin/
 
 After installation, run:
 
@@ -64,14 +66,35 @@ System-wide Installation (as root)
 This installs to /usr/local/lib/import_pentacam/ with a wrapper script
 in /usr/local/bin/.
 
+Windows
+-------
+
+Windows builds are not yet automated but the source code is cross-platform.
+To build on Windows:
+
+1. Install Rust via https://rustup.rs
+2. Install Git for Windows (https://git-scm.com) which includes Git Bash
+3. Open Git Bash and run:
+
+       ./configure --cpu-only
+       make dist
+
+   For GPU support, manually download ONNX Runtime for Windows from
+   https://github.com/microsoft/onnxruntime/releases and pass its path:
+
+       ./configure --ort-dir /c/path/to/onnxruntime
+
+   Note: The configure script and Makefile require a bash-compatible shell
+   (Git Bash, WSL, or MSYS2). They do not run in PowerShell or CMD directly.
+
 Notes
 -----
 
-- ONNX Runtime is downloaded to ort/ in the source directory. To avoid
-  re-downloading, keep this directory across clean builds.
+- ONNX Runtime is downloaded to ort/ in the source directory. OCR models
+  are downloaded to models/. Both are preserved across clean builds.
 - The binary uses RUNPATH=$ORIGIN to find its shared libraries relative
   to itself. No LD_LIBRARY_PATH configuration is needed.
-- OCR models (~100 MB) are bundled in the models/ subdirectory and must
-  be in the same relative location as the binary.
+- OCR models and ONNX Runtime libraries must be in the same relative
+  location as the binary (models/ subdirectory, .so files alongside).
 - GPU memory: expect ~8-34 GB VRAM usage during OCR. The software falls
   back to CPU if GPU is unavailable or runs out of memory.
