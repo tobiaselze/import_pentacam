@@ -494,13 +494,15 @@ impl PentacamPipeline {
     /// Determine whether to process or skip a file based on CSV printout type.
     fn csv_printout_filter(hint: &Option<String>) -> CsvPrintoutAction {
         match hint.as_deref() {
-            None => CsvPrintoutAction::DetectFromFile,
-            Some("4 Maps Refr") => CsvPrintoutAction::Process,
-            Some("4 Maps Select") => CsvPrintoutAction::Process,
-            Some("Enhanced Ectasia") => CsvPrintoutAction::Process,
-            Some("Topometric") => CsvPrintoutAction::Process,
-            Some("Refractive") => CsvPrintoutAction::Skip,
-            Some(_) => CsvPrintoutAction::Skip, // all other known types unsupported
+            None | Some("") => CsvPrintoutAction::DetectFromFile,
+            Some(s) => {
+                // Use starts_with to handle noisy suffixes from PACS database
+                if s.starts_with("4 Maps Refr") { CsvPrintoutAction::Process }
+                else if s.starts_with("4 Maps Select") { CsvPrintoutAction::Process }
+                else if s.contains("Enhanced Ectasia") { CsvPrintoutAction::Process }
+                else if s.starts_with("Topometric") || s.starts_with("4 Maps Topo") { CsvPrintoutAction::Process }
+                else { CsvPrintoutAction::Skip }
+            }
         }
     }
 
