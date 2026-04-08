@@ -38,7 +38,7 @@ else
     BIN_NAME := import_pentacam
 endif
 
-.PHONY: build dist dist-tar deb install clean check-config
+.PHONY: build dist dist-tar deb msi install clean check-config
 
 check-config:
 	@if [ ! -f config.mk ]; then \
@@ -160,6 +160,26 @@ endif
 	@echo ""
 	@echo "Package: dist/$(DEB_PKG).deb"
 	@echo "Install: sudo dpkg -i dist/$(DEB_PKG).deb"
+
+msi: dist
+ifeq ($(IS_WINDOWS),1)
+ifndef WIX_BIN
+	@echo "ERROR: WiX Toolset not found. Run ./configure to download it."
+	@exit 1
+endif
+	@echo "Building MSI installer ..."
+	cargo wix -p import_pentacam --nocapture \
+		--bin-path "$(WIX_BIN)" \
+		--no-build \
+		-o dist/import_pentacam-$(VERSION)-win-x64.msi
+	@echo ""
+	@echo "Installer: dist/import_pentacam-$(VERSION)-win-x64.msi"
+	@echo "Install:   msiexec /i dist\\import_pentacam-$(VERSION)-win-x64.msi"
+	@echo "Silent:    msiexec /i dist\\import_pentacam-$(VERSION)-win-x64.msi /quiet"
+else
+	@echo "ERROR: MSI packages are only supported on Windows."
+	@exit 1
+endif
 
 install: dist
 ifeq ($(IS_WINDOWS),1)

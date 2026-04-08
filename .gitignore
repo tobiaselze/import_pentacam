@@ -9,8 +9,10 @@ models/*.txt
 ort_runtime/
 ort/
 llvm/
+/wix/
 config.mk
 dist/
+/*.wxs
 models/PaddleOCR-VL/
 models/unirec-0.1b/
 models/HunyuanOCR/

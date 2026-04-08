@@ -21,6 +21,7 @@ x86_64 with MSVC. All changes are backward-compatible with Linux.
 | LIBCLANG_PATH | FIXED | `configure` auto-detects or downloads LLVM, writes `LIBCLANG_PATH` to `config.mk` |
 | Path handling | NOT NEEDED | `render.rs` uses `temp_path()`, processed_files.csv uses consistent string keys |
 | Poppler on Windows | NOT NEEDED | MuPDF is default renderer; Poppler subprocess calls work if installed |
+| MSI installer | DONE | `make msi` via cargo-wix + WiX v3 (both auto-downloaded by `configure`) |
 
 ### Prerequisites for Windows Build
 
@@ -210,8 +211,30 @@ Expected output: `pentacam_raw.csv`, `pentacam_compact.csv`,
 - **make not in Git Bash**: Git Bash doesn't include `make` by default.
   Install via MSYS2 (`pacman -S make`) or use the manual build steps in INSTALL.
 
+## MSI Installer
+
+An MSI installer is built via `make msi` (requires `make dist` first).
+
+**How it works**:
+- `configure` auto-downloads WiX Toolset v3 portable binaries (~39 MB) to `wix/`
+- `configure` installs `cargo-wix` via `cargo install`
+- `cargo wix` compiles `import_pentacam/wix/main.wxs` into an MSI
+- The MSI sources files from `dist/import_pentacam/` (built by `make dist`)
+
+**What the MSI installs**:
+- `C:\Program Files\import_pentacam\import_pentacam.exe`
+- `C:\Program Files\import_pentacam\onnxruntime.dll`
+- `C:\Program Files\import_pentacam\models\` (3 OCR model files)
+- Adds install directory to system PATH
+- Registers in "Add/Remove Programs"
+
+**Silent install**: `msiexec /i import_pentacam-*.msi /quiet`
+
+**WiX template**: `import_pentacam/wix/main.wxs` — edit to add GPU DLLs,
+icons, or additional features.
+
 ## Future Improvements
 
-1. MSI or self-extracting installer for end-user distribution
-2. GitHub Actions CI for automated Windows builds
-3. Test with PACS data accessible from Windows (SAMBA mount or local copy)
+1. GitHub Actions CI for automated Windows builds
+2. Test with PACS data accessible from Windows (SAMBA mount or local copy)
+3. Add GPU DLL components to MSI (conditional on CUDA_PROVIDER)

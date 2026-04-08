@@ -1,0 +1,156 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  WiX installer for import_pentacam.
+
+  Installs to C:\Program Files\import_pentacam\ with:
+    import_pentacam.exe
+    onnxruntime.dll  (and GPU DLLs if present)
+    models\*.onnx, *.txt
+
+  Adds install directory to system PATH.
+  Supports silent install: msiexec /i import_pentacam-*.msi /quiet
+-->
+
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='import_pentacam'
+        UpgradeCode='4F54A80D-7A56-4059-9984-CB09B3CF9BC2'
+        Manufacturer='Tobias Elze'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='Extract clinical measurements from Pentacam DICOM, PDF, and image files'
+            Manufacturer='Tobias Elze'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='import_pentacam Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='import_pentacam'>
+
+                    <!-- Main binary -->
+                    <Component Id='MainExecutable' Guid='*'>
+                        <File
+                            Id='ImportPentacamExe'
+                            Name='import_pentacam.exe'
+                            DiskId='1'
+                            Source='$(var.CargoTargetBinDir)\import_pentacam.exe'
+                            KeyPath='yes'/>
+                    </Component>
+
+                    <!-- ONNX Runtime DLL (must be next to .exe) -->
+                    <Component Id='OnnxRuntime' Guid='*'>
+                        <File
+                            Id='OnnxRuntimeDll'
+                            Name='onnxruntime.dll'
+                            DiskId='1'
+                            Source='dist\import_pentacam\onnxruntime.dll'
+                            KeyPath='yes'/>
+                    </Component>
+
+                    <!-- PATH environment variable -->
+                    <Component Id='PathEntry' Guid='7997F1C2-825A-4719-8A9F-9957483A93C7' KeyPath='yes'>
+                        <Environment
+                            Id='PATH'
+                            Name='PATH'
+                            Value='[APPLICATIONFOLDER]'
+                            Permanent='no'
+                            Part='last'
+                            Action='set'
+                            System='yes'/>
+                    </Component>
+
+                    <!-- Models subdirectory -->
+                    <Directory Id='ModelsFolder' Name='models'>
+                        <Component Id='ModelDet' Guid='*'>
+                            <File
+                                Id='ModelDetOnnx'
+                                Name='pp-ocrv5_server_det.onnx'
+                                DiskId='1'
+                                Source='dist\import_pentacam\models\pp-ocrv5_server_det.onnx'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='ModelRec' Guid='*'>
+                            <File
+                                Id='ModelRecOnnx'
+                                Name='en_pp-ocrv5_mobile_rec.onnx'
+                                DiskId='1'
+                                Source='dist\import_pentacam\models\en_pp-ocrv5_mobile_rec.onnx'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='ModelDict' Guid='*'>
+                            <File
+                                Id='ModelDictTxt'
+                                Name='en_ppocrv5_dict.txt'
+                                DiskId='1'
+                                Source='dist\import_pentacam\models\en_ppocrv5_dict.txt'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='MainFeature'
+            Title='import_pentacam'
+            Description='Installs import_pentacam with ONNX Runtime and OCR models.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+
+            <ComponentRef Id='MainExecutable'/>
+            <ComponentRef Id='OnnxRuntime'/>
+            <ComponentRef Id='ModelDet'/>
+            <ComponentRef Id='ModelRec'/>
+            <ComponentRef Id='ModelDict'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the install location to the PATH system environment variable. This allows import_pentacam to be called from any command prompt.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='PathEntry'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <Property Id='ARPHELPLINK' Value='https://github.com/tobiaselze/import_pentacam'/>
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+            <!-- Skip EULA dialog -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+        </UI>
+
+    </Product>
+
+</Wix>

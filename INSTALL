@@ -92,7 +92,9 @@ The configure script works identically on Linux and Windows (Git Bash). On
 Windows it automatically:
 - Downloads the win-x64 ORT package (.zip) instead of linux-x64 (.tgz)
 - Detects MSVC (cl.exe) and CMake availability
-- Locates LLVM/libclang and writes LIBCLANG_PATH to config.mk
+- Locates or downloads LLVM/libclang and writes LIBCLANG_PATH to config.mk
+- Downloads WiX Toolset v3 portable binaries for MSI building
+- Installs cargo-wix if not present
 
 Make Targets
 ------------
@@ -102,6 +104,7 @@ Make Targets
                         libraries and models (portable, self-contained)
     make dist-tar       Build + create archive (.tar.gz on Linux, .zip on Windows)
     make deb            Build + create .deb package (Linux only)
+    make msi            Build + create .msi installer (Windows only)
     make install        Build + install to PREFIX (default: ~/.local)
     make clean          Remove build artifacts
 
@@ -135,6 +138,22 @@ DLLs next to the .exe — no PATH or environment configuration needed.
 
 For GPU builds, onnxruntime_providers_cuda.dll and
 onnxruntime_providers_shared.dll are also included.
+
+MSI Installer (Windows)
+-----------------------
+
+After `make msi`, an MSI installer is created in dist/:
+
+    dist/import_pentacam-0.1.0-win-x64.msi
+
+The MSI installs to C:\Program Files\import_pentacam\ and:
+- Places import_pentacam.exe, onnxruntime.dll, and models/ in the install dir
+- Adds the install directory to the system PATH
+- Registers in "Add/Remove Programs" for clean uninstall
+
+Install interactively (double-click) or silently:
+
+    msiexec /i import_pentacam-0.1.0-win-x64.msi /quiet
 
 System-wide Installation (Linux, as root)
 -----------------------------------------
