@@ -1,0 +1,77 @@
+INSTALL — import_pentacam
+=========================
+
+Prerequisites
+-------------
+
+- Rust toolchain (install via https://rustup.rs)
+- Linux x86_64 (Ubuntu 22.04+ or equivalent, glibc >= 2.35)
+- Internet connection (for downloading ONNX Runtime)
+- Optional: NVIDIA GPU with CUDA drivers for GPU acceleration
+
+Quick Start
+-----------
+
+    ./configure
+    make install
+
+This will:
+1. Download ONNX Runtime (GPU version if CUDA is detected, CPU otherwise)
+2. Build the release binary
+3. Install to ~/.local/lib/import_pentacam/ with a wrapper in ~/.local/bin/
+
+After installation, run:
+
+    import_pentacam --help
+
+Configure Options
+-----------------
+
+    ./configure                    Auto-detect everything
+    ./configure --cpu-only         Force CPU-only build (no CUDA, smaller download)
+    ./configure --ort-dir DIR      Use an existing ONNX Runtime installation
+    ./configure --prefix DIR       Install to DIR instead of ~/.local
+
+Make Targets
+------------
+
+    make                Build release binary only
+    make dist           Build + assemble dist/import_pentacam/ with all
+                        libraries and models (portable, self-contained)
+    make dist-tar       Build + create .tar.gz archive for distribution
+    make install        Build + install to PREFIX (default: ~/.local)
+    make clean          Remove build artifacts
+
+Distributing
+------------
+
+After `make dist`, the dist/import_pentacam/ folder is fully self-contained.
+Copy it to any Linux x86_64 machine and run directly — no installation or
+environment variables needed:
+
+    cd import_pentacam/
+    ./import_pentacam --help
+
+For GPU support, the target machine needs NVIDIA CUDA drivers installed
+(the CUDA runtime libraries are bundled).
+
+System-wide Installation (as root)
+----------------------------------
+
+    ./configure --prefix /usr/local
+    sudo make install
+
+This installs to /usr/local/lib/import_pentacam/ with a wrapper script
+in /usr/local/bin/.
+
+Notes
+-----
+
+- ONNX Runtime is downloaded to ort/ in the source directory. To avoid
+  re-downloading, keep this directory across clean builds.
+- The binary uses RUNPATH=$ORIGIN to find its shared libraries relative
+  to itself. No LD_LIBRARY_PATH configuration is needed.
+- OCR models (~100 MB) are bundled in the models/ subdirectory and must
+  be in the same relative location as the binary.
+- GPU memory: expect ~8-34 GB VRAM usage during OCR. The software falls
+  back to CPU if GPU is unavailable or runs out of memory.
