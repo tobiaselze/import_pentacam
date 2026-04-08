@@ -979,6 +979,12 @@ impl PentacamPipeline {
         };
 
         if let Some(result) = result_opt {
+            // Skip unsupported printout types (Holladay, Fourier, etc.)
+            if !Self::is_supported_printout(&result.printout_type) {
+                self.files_processed += 1;
+                return;
+            }
+
             // Determine demographics: prefer CSV metadata when available,
             // fall back to OCR header extraction.
             let (patient_id, family_name, given_name, dob, eye, exam_date, exam_time) =
