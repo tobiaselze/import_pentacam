@@ -277,7 +277,13 @@ fn main() {
     };
 
     // Initialize OCR engine
-    let model_dir = PathBuf::from("models");
+    // Look for models/ next to the binary first (system-wide install),
+    // then fall back to current directory (development / dist mode).
+    let model_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("models")))
+        .filter(|d| d.exists())
+        .unwrap_or_else(|| PathBuf::from("models"));
     ocr_import::ocr_engine::init(
         model_dir.join("pp-ocrv5_server_det.onnx").to_str().unwrap(),
         model_dir.join("en_pp-ocrv5_mobile_rec.onnx").to_str().unwrap(),
