@@ -25,7 +25,9 @@ INPUT MODES:
   File list       Pass a .txt file with one file path per line.
   CSV file list   Pass a .csv file with a header row. Only the column
                   "filename" is required; optional columns: id, familyname,
-                  givenname, dob, examdate, examtime, laterality, printouttype.
+                  givenname, dob (YYYY-MM-DD or YYYYMMDD), examdate
+                  (YYYY-MM-DD or YYYYMMDD), examtime (6-digit HHMMSS),
+                  laterality (OD or OS), printouttype.
                   When metadata is provided, OCR demographics extraction is
                   skipped for image files. Files with unsupported printout types
                   are skipped without opening. Paths may use ~ for $HOME.
@@ -60,9 +62,14 @@ SUPPORTED PRINTOUT TYPES:
 
 DATA SOURCES (priority: SR > SPR > OCR):
 
-  DICOM SR      Machine-precision values from Structured Reports (fw 1.30+).
-  SPR blob      Exact binary readout from proprietary format (fw <= 1.28).
+  DICOM SR      Some Pentacam DICOMs (firmware 1.30+) include DICOM Structured
+                Reports with machine-precision measurement values. When present,
+                these are prioritized over all other sources.
+  SPR blob      Some Pentacam DICOMs embed a proprietary binary file (SPR format)
+                with exact measurement readouts. Used when SR is not available.
   OCR           PaddleOCR v5 via ONNX Runtime, with field-specific confidence.
+                Used as fallback when neither SR nor SPR is available, and as
+                cross-validation when SR is present.
 
 BACKUP:
 
@@ -108,7 +115,8 @@ struct Args {
     #[arg(long)]
     no_compact: bool,
 
-    /// Use Poppler renderer instead of MuPDF (default)
+    /// Use Poppler (pdftoppm) for PDF rendering instead of MuPDF (default).
+    /// Requires poppler-utils to be installed on the system.
     #[arg(long)]
     poppler: bool,
 
