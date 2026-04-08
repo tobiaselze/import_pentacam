@@ -136,8 +136,15 @@ ifeq ($(CUDA_PROVIDER),1)
 	cp $(DIST_DIR)/libonnxruntime_providers_shared.so dist/$(DEB_PKG)/usr/lib/import_pentacam/
 endif
 	cp -r $(DIST_DIR)/models/* dist/$(DEB_PKG)/usr/lib/import_pentacam/models/
-	@# Wrapper script
+	@# Wrapper script with GPU auto-detection
 	@echo '#!/bin/sh' > dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo '# Auto-detect freest GPU (falls back to CPU if unavailable)' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo 'if command -v nvidia-smi >/dev/null 2>&1; then' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo '    GPU=$$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits 2>/dev/null | sort -t, -k2 -rn | head -1 | cut -d, -f1)' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo '    if [ -n "$$GPU" ]; then' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo '        export CUDA_VISIBLE_DEVICES="$$GPU"' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo '    fi' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
+	@echo 'fi' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
 	@echo 'exec /usr/lib/import_pentacam/import_pentacam "$$@"' >> dist/$(DEB_PKG)/usr/bin/import_pentacam
 	@chmod +x dist/$(DEB_PKG)/usr/bin/import_pentacam
 	@# Control file
@@ -198,8 +205,15 @@ else
 	cp $(DIST_DIR)/import_pentacam $(PREFIX)/lib/import_pentacam/
 	cp $(DIST_DIR)/libonnxruntime* $(PREFIX)/lib/import_pentacam/
 	cp -r $(DIST_DIR)/models/* $(PREFIX)/lib/import_pentacam/models/
-	@# Create wrapper script that runs from the lib directory
+	@# Create wrapper script with GPU auto-detection
 	@echo '#!/bin/sh' > $(PREFIX)/bin/import_pentacam
+	@echo '# Auto-detect freest GPU (falls back to CPU if unavailable)' >> $(PREFIX)/bin/import_pentacam
+	@echo 'if command -v nvidia-smi >/dev/null 2>&1; then' >> $(PREFIX)/bin/import_pentacam
+	@echo '    GPU=$$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits 2>/dev/null | sort -t, -k2 -rn | head -1 | cut -d, -f1)' >> $(PREFIX)/bin/import_pentacam
+	@echo '    if [ -n "$$GPU" ]; then' >> $(PREFIX)/bin/import_pentacam
+	@echo '        export CUDA_VISIBLE_DEVICES="$$GPU"' >> $(PREFIX)/bin/import_pentacam
+	@echo '    fi' >> $(PREFIX)/bin/import_pentacam
+	@echo 'fi' >> $(PREFIX)/bin/import_pentacam
 	@echo 'exec "$(PREFIX)/lib/import_pentacam/import_pentacam" "$$@"' >> $(PREFIX)/bin/import_pentacam
 	@chmod +x $(PREFIX)/bin/import_pentacam
 	@echo ""
