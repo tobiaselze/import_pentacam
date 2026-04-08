@@ -17,10 +17,14 @@ Prerequisites (Windows)
 - Git for Windows (https://git-scm.com — includes Git Bash)
 - Visual Studio Build Tools (https://visualstudio.microsoft.com/downloads/)
   with "Desktop development with C++" workload
-- LLVM (https://github.com/llvm/llvm-project/releases — install the
-  LLVM-*-win64.exe package; needed for MuPDF FFI binding generation)
-- curl (bundled with Git Bash)
-- Internet connection (first build only — downloads ONNX Runtime and OCR models)
+- LLVM (needed for MuPDF FFI binding generation via bindgen).
+  ./configure will auto-download libclang.dll (~96 MB, extracted from the
+  ~936 MB LLVM release archive) into a local llvm/ directory if not found.
+  No admin privileges required. Alternatively, install LLVM system-wide from
+  https://github.com/llvm/llvm-project/releases before running ./configure.
+- curl, tar, xz (bundled with Git Bash)
+- Internet connection (first build only — downloads ONNX Runtime, OCR models,
+  and libclang if not already installed)
 - Optional: NVIDIA GPU with CUDA drivers for GPU acceleration
 
 Quick Start (Linux)

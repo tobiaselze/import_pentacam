@@ -169,10 +169,13 @@ download_model "$MODEL_BASE/pp-ocrv5_server_det.onnx" "$MODEL_DIR/pp-ocrv5_serve
 download_model "$MODEL_BASE/en_pp-ocrv5_mobile_rec.onnx" "$MODEL_DIR/en_pp-ocrv5_mobile_rec.onnx"
 download_model "$MODEL_BASE/ppocrv5_en_dict.txt" "$MODEL_DIR/en_ppocrv5_dict.txt"
 
-# --- Check libclang (Windows — needed for bindgen/MuPDF) ---
+# --- Check/download libclang (Windows — needed for bindgen/MuPDF) ---
+LLVM_VERSION="18.1.8"
 LIBCLANG=""
 if [[ "$IS_WINDOWS" -eq 1 ]]; then
+    LOCAL_LLVM="$(pwd)/llvm/bin"
     for candidate in \
+        "$LOCAL_LLVM" \
         "/c/Program Files/LLVM/bin" \
         "/c/Program Files (x86)/LLVM/bin" \
         "$PROGRAMFILES/LLVM/bin"; do
@@ -181,11 +184,37 @@ if [[ "$IS_WINDOWS" -eq 1 ]]; then
             break
         fi
     done
+
     if [[ -n "$LIBCLANG" ]]; then
         echo "Clang:    $LIBCLANG/libclang.dll"
     else
-        echo "WARNING:  libclang.dll not found. Install LLVM (https://llvm.org/builds/)"
-        echo "          MuPDF bindings generation (bindgen) will fail without it."
+        echo ""
+        echo "libclang.dll not found — downloading from LLVM ${LLVM_VERSION} release ..."
+        LLVM_TAR="clang+llvm-${LLVM_VERSION}-x86_64-pc-windows-msvc.tar.xz"
+        LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${LLVM_TAR}"
+        LLVM_DL="/tmp/${LLVM_TAR}"
+
+        echo "  URL: $LLVM_URL"
+        if [[ -f "$LLVM_DL" ]]; then
+            echo "  (archive already cached in $LLVM_DL)"
+        else
+            curl -L --progress-bar "$LLVM_URL" -o "$LLVM_DL"
+        fi
+
+        echo "  Extracting libclang.dll (~96 MB) ..."
+        mkdir -p "$(pwd)/llvm/bin"
+        tar -xJf "$LLVM_DL" \
+            -C "$(pwd)/llvm/bin" \
+            --strip-components=2 \
+            "clang+llvm-${LLVM_VERSION}-x86_64-pc-windows-msvc/bin/libclang.dll"
+
+        if [[ -f "$(pwd)/llvm/bin/libclang.dll" ]]; then
+            LIBCLANG="$(pwd)/llvm/bin"
+            echo "Clang:    $LIBCLANG/libclang.dll (downloaded)"
+        else
+            echo "ERROR: Failed to extract libclang.dll from archive."
+            echo "       Install LLVM manually: https://github.com/llvm/llvm-project/releases"
+        fi
     fi
 fi
 

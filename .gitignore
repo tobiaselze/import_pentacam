@@ -8,6 +8,7 @@ models/*.onnx
 models/*.txt
 ort_runtime/
 ort/
+llvm/
 config.mk
 dist/
 models/PaddleOCR-VL/

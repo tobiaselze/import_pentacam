@@ -18,7 +18,7 @@ x86_64 with MSVC. All changes are backward-compatible with Linux.
 | ONNX Runtime | FIXED | `configure` downloads win-x64 .zip on Windows |
 | Tilde expansion | FIXED | `pipeline.rs` now falls back to `USERPROFILE` if `HOME` is unset |
 | Build system | FIXED | `configure` detects Windows, LLVM, MSVC; `Makefile` handles .exe/.dll |
-| LIBCLANG_PATH | FIXED | `configure` auto-detects LLVM and writes `LIBCLANG_PATH` to `config.mk` |
+| LIBCLANG_PATH | FIXED | `configure` auto-detects or downloads LLVM, writes `LIBCLANG_PATH` to `config.mk` |
 | Path handling | NOT NEEDED | `render.rs` uses `temp_path()`, processed_files.csv uses consistent string keys |
 | Poppler on Windows | NOT NEEDED | MuPDF is default renderer; Poppler subprocess calls work if installed |
 
@@ -27,8 +27,9 @@ x86_64 with MSVC. All changes are backward-compatible with Linux.
 1. Rust (MSVC toolchain, the default on Windows) — https://rustup.rs
 2. Git for Windows (includes Git Bash) — https://git-scm.com
 3. Visual Studio Build Tools with "Desktop development with C++" workload
-4. LLVM (provides libclang.dll for bindgen) — install from
-   https://github.com/llvm/llvm-project/releases (the LLVM-*-win64.exe package)
+4. LLVM (provides libclang.dll for bindgen) — `./configure` will auto-download
+   libclang.dll into a local `llvm/` directory if not found. No admin required.
+   Or install LLVM system-wide from https://github.com/llvm/llvm-project/releases.
 
 ### Build Commands (Git Bash)
 
@@ -119,6 +120,8 @@ zero impact on Linux builds.
 - Downloads `onnxruntime-win-x64-*.zip` instead of `-linux-*.tgz`
 - Uses `unzip` instead of `tar xz` for extraction
 - Detects MSVC (`cl.exe`), CMake, and LLVM (`libclang.dll`)
+- Auto-downloads `libclang.dll` (~96 MB) from LLVM tar.xz release if not found
+  (extracted to local `llvm/` directory, no admin required)
 - Writes `LIBCLANG_PATH` to `config.mk` for bindgen
 
 ### 3. Makefile — Cross-Platform dist/install
@@ -142,7 +145,7 @@ zero impact on Linux builds.
 
 | File | What changed |
 |------|-------------|
-| `configure` | Windows platform detection, ORT download, LLVM detection |
+| `configure` | Windows platform detection, ORT download, LLVM auto-download |
 | `Makefile` | Windows dist/install targets, .exe/.dll handling |
 | `Cargo.toml` | `[patch.crates-io]` for mupdf Windows fix |
 | `patches/mupdf-0.6.0/src/device/native.rs` | `max_align_t` stand-in for MSVC |
