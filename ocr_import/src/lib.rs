@@ -140,6 +140,26 @@ fn process_page_inner(
         }
     };
 
+    // DEBUG: Print label-matched fields and their positions
+    if std::env::var("PENTACAM_DEBUG_LABELS").is_ok() {
+        let mut fields: Vec<_> = labeled.iter().collect();
+        fields.sort_by(|a, b| a.1.cy.partial_cmp(&b.1.cy).unwrap());
+        eprintln!("  === LABEL-MATCHED FIELDS ({}) ===", fields.len());
+        for (name, loc) in &fields {
+            eprintln!("    {:<20} cy={:7.1} cx={:7.1} val={:>10} conf={:.3} raw={}",
+                name, loc.cy, loc.cx, format!("{:.4}", loc.value), loc.conf, loc.raw_text);
+        }
+        // Show which archetype fields are MISSING
+        let archetype = field_locate::archetype_for(&printout_type);
+        let missing: Vec<_> = archetype.iter()
+            .filter(|&&(name, _, _)| !labeled.contains_key(name))
+            .collect();
+        eprintln!("  === MISSING FROM LABEL MATCH ({}) ===", missing.len());
+        for &&(name, cy, cx) in &missing {
+            eprintln!("    {:<20} archetype cy={:.1} cx={:.1}", name, cy, cx);
+        }
+    }
+
     // Step 4: Post-processing corrections
     postprocess::apply_corrections(&mut labeled);
 
@@ -157,9 +177,17 @@ fn process_page_inner(
     // performs WORSE on isolated crops than full pages — the model needs page context.
     // Only selective re-crop works (suspicious values, sign rescue, missing fields).
 
+    // KPD guard: KPD and HWTW occupy the same layout slot on older firmware
+    // printouts. If KPD was found via label matching, HWTW does not exist on
+    // this printout — remove any mismatched HWTW value.
+    let has_kpd = labeled.contains_key("KPD");
+    if has_kpd {
+        labeled.remove("HWTW");
+    }
+
     // Step 5a: Crop-based re-reading for missing fields (archetype fallback)
     if fit.n_inliers >= 5 {
-        crop_rescue_missing(&mut labeled, img_path, archetype, &fit);
+        crop_rescue_missing(&mut labeled, img_path, archetype, &fit, has_kpd);
     }
 
     // Step 5a2: Re-crop fields with suspicious values.
@@ -170,6 +198,36 @@ fn process_page_inner(
 
     // Step 5c: Post-processing again (crop rescue may have added raw values needing fixes)
     postprocess::apply_corrections(&mut labeled);
+
+    // Step 5d: Physiological range checks — reject crop-rescued values that are
+    // obviously wrong (e.g., AC_depth=269 when it should be ~2-5mm). These catch
+    // cases where the affine-predicted crop position landed on the wrong field.
+    let range_checks: &[(&str, f64, f64)] = &[
+        ("AC_depth",     1.0,   6.0),
+        ("PupilDia",     1.0,   9.0),
+        ("HWTW",         8.0,  15.0),
+        ("Angle",        10.0, 70.0),
+        ("ChamberVol",   30.0, 400.0),
+        ("CorneaVol",    30.0, 80.0),
+        ("Axis_front",   0.0, 180.0),
+        ("Axis_back",    0.0, 180.0),
+        ("Rmin_front",   4.0,  10.0),
+        ("Rmin_back",    3.0,   9.0),
+        ("Rper_front",   5.0,  11.0),
+        ("Rper_back",    4.0,  10.0),
+    ];
+    for &(field, lo, hi) in range_checks {
+        if let Some(loc) = labeled.get(field) {
+            let v = loc.value;
+            if v < lo || v > hi {
+                if std::env::var("PENTACAM_DEBUG_LABELS").is_ok() {
+                    eprintln!("  RANGE CHECK: removing {}={:.2} (outside [{}, {}])",
+                        field, v, lo, hi);
+                }
+                labeled.remove(field);
+            }
+        }
+    }
 
     // Step 6: Save crops if requested
     if let Some(opts) = save {
@@ -419,10 +477,18 @@ fn crop_rescue_missing(
     img_path: &Path,
     archetype: &[(&str, f32, f32)],
     fit: &field_locate::AffineFit,
+    has_kpd: bool,
 ) {
     // Only load the image if there are missing fields
     let missing: Vec<(&str, f32, f32)> = archetype.iter()
-        .filter(|&&(name, _, _)| !labeled.contains_key(name))
+        .filter(|&&(name, _, _)| {
+            if labeled.contains_key(name) { return false; }
+            // KPD guard: do not crop-rescue HWTW when KPD is present —
+            // HWTW does not exist on KPD-layout printouts and the archetype
+            // position would read the wrong value.
+            if has_kpd && name == "HWTW" { return false; }
+            true
+        })
         .map(|&(name, cy, cx)| (name, cy, cx))
         .collect();
 

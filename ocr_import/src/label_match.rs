@@ -41,7 +41,7 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
 
     // Detect zone boundaries from section headers
     let (front_y, back_y, _tnp_header_y) = detect_zones(&items_sorted, printout_type_is_topo);
-    let bottom_y: YRange = (1500.0, 2400.0);
+    let bottom_y: YRange = (1500.0, 2700.0);
 
     // Build label→field map
     let label_map = build_label_map_owned(front_y, back_y, bottom_y);
