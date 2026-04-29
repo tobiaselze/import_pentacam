@@ -57,6 +57,68 @@ pub const ARCHETYPE_4MAPS: &[(&str, f32, f32)] = &[
     ("Qval_back",      1597.0,  310.0),
 ];
 
+/// (cy_A, cx_A) for each field on 4-Maps pages from PACS JPG exports with
+/// the taller layout (original 1200x902/904, upscaled to ~3500x2636).
+/// Measured on 5 files from the production run, positions consistent ±2px.
+/// The taller layout has a larger header area pushing all fields down, with
+/// a non-uniform shift that grows from ~160px at the top to ~195px at bottom.
+pub const ARCHETYPE_4MAPS_TALL: &[(&str, f32, f32)] = &[
+    // field,           cy_A,   cx_A
+    // Front keratometry — measured from label matching on 5 files
+    ("Rf_front",        872.0,  463.0),
+    ("Rs_front",        962.0,  465.0),
+    ("Rm_front",       1051.0,  461.0),
+    ("K1_front",        870.0,  798.0),
+    ("K2_front",        960.0,  798.0),
+    ("Km_front",       1051.0,  796.0),
+    ("Astig_front",    1143.0,  787.0),
+    ("Axis_front",     1143.0,  445.0),
+    ("Rmin_front",     1230.0,  810.0),
+    ("Rper_front",     1230.0,  445.0),
+    // Back keratometry — measured from label matching + visual inspection
+    ("Rf_back",        1413.0,  463.0),
+    ("Rs_back",        1504.0,  463.0),
+    ("Rm_back",        1594.0,  463.0),
+    ("K1_back",        1413.0,  794.0),
+    ("K2_back",        1415.0,  794.0),
+    ("Km_back",        1504.0,  795.0),
+    ("Astig_back",     1683.0,  787.0),
+    ("Axis_back",      1683.0,  447.0),
+    ("Rmin_back",      1770.0,  810.0),
+    ("Rper_back",      1770.0,  463.0),
+    // Bottom panel — measured from label matching on 5 files
+    ("PupilCenter",    1959.0,  454.0),
+    ("PachyVertex",    2038.0,  454.0),
+    ("Thinnest",       2117.0,  454.0),
+    ("Kmax",           2195.0,  450.0),
+    ("PupilCenter_x",  1959.0,  713.0),
+    ("PupilCenter_y",  1960.0,  870.0),
+    ("PachyVertex_x",  2036.0,  710.0),
+    ("PachyVertex_y",  2036.0,  864.0),
+    ("Thinnest_x",     2117.0,  713.0),
+    ("Thinnest_y",     2117.0,  871.0),
+    ("Kmax_x",         2194.0,  716.0),
+    ("Kmax_y",         2195.0,  870.0),
+    ("CorneaVol",      2291.0,  470.0),
+    ("HWTW",           2291.0,  844.0),
+    ("ChamberVol",     2379.0,  466.0),
+    ("Angle",          2380.0,  824.0),
+    ("AC_depth",       2466.0,  463.0),
+    ("PupilDia",       2466.0,  844.0),
+    ("Qval_front",     1230.0,  200.0),
+    ("Qval_back",      1770.0,  200.0),
+];
+
+/// Upscaled image height range that identifies the 904px tall layout.
+/// Original 1200x902-904 → upscaled to ~3500x2630-2637.
+pub const TALL_LAYOUT_HEIGHT_RANGE: (u32, u32) = (2620, 2650);
+
+/// Check if an upscaled image height corresponds to the tall (904px) layout.
+pub fn is_tall_layout(upscaled_height: u32) -> bool {
+    upscaled_height >= TALL_LAYOUT_HEIGHT_RANGE.0
+        && upscaled_height <= TALL_LAYOUT_HEIGHT_RANGE.1
+}
+
 /// (cy_A, cx_A) for each field on Topometric/KC-Staging pages.
 pub const ARCHETYPE_TOPO: &[(&str, f32, f32)] = &[
     ("Rf_front",        710.0,  518.0),
@@ -367,15 +429,45 @@ fn median(vals: &[f64]) -> f64 {
 // ---------------------------------------------------------------------------
 
 pub fn archetype_for(printout_type: &PrintoutType) -> &'static [(&'static str, f32, f32)] {
+    archetype_for_with_height(printout_type, None)
+}
+
+/// Select archetype considering optional upscaled image height.
+/// When height indicates the tall (904px) layout, uses ARCHETYPE_4MAPS_TALL
+/// for 4Maps printout types.
+pub fn archetype_for_with_height(
+    printout_type: &PrintoutType,
+    upscaled_height: Option<u32>,
+) -> &'static [(&'static str, f32, f32)] {
     match printout_type {
         PrintoutType::TopometricKcStaging => ARCHETYPE_TOPO,
         PrintoutType::BelinAmbrosio => ARCHETYPE_BELIN,
-        _ => ARCHETYPE_4MAPS,
+        _ => {
+            if upscaled_height.map_or(false, is_tall_layout) {
+                ARCHETYPE_4MAPS_TALL
+            } else {
+                ARCHETYPE_4MAPS
+            }
+        }
     }
 }
 
 /// Select archetype based on whether the printout is Topometric.
 /// Used by label_match.rs where we don't have the full PrintoutType enum.
 pub fn archetype_for_type(is_topo: bool) -> &'static [(&'static str, f32, f32)] {
-    if is_topo { ARCHETYPE_TOPO } else { ARCHETYPE_4MAPS }
+    archetype_for_type_with_height(is_topo, None)
+}
+
+/// Select archetype with optional height, for label_match.rs.
+pub fn archetype_for_type_with_height(
+    is_topo: bool,
+    upscaled_height: Option<u32>,
+) -> &'static [(&'static str, f32, f32)] {
+    if is_topo {
+        ARCHETYPE_TOPO
+    } else if upscaled_height.map_or(false, is_tall_layout) {
+        ARCHETYPE_4MAPS_TALL
+    } else {
+        ARCHETYPE_4MAPS
+    }
 }

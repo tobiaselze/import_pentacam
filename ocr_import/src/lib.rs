@@ -94,20 +94,33 @@ pub fn process_page_with_options(
     };
     let t_fullpage = t_start.elapsed();
 
-    process_page_inner(img_path, source_file, page_number, items, save, Some(t_fullpage))
+    process_page_inner(img_path, source_file, page_number, items, save, Some(t_fullpage), None)
 }
 
 /// Process a page using pre-computed OCR items (avoids double OCR run).
 ///
 /// `img_path` is still needed for crop rescue (which loads image regions from disk).
 /// `items` are the OCR results from a prior `run_full_page` or `run_full_page_mem` call.
+/// `upscaled_height` is the height of the upscaled image (if upscaled), used for
+/// layout variant detection (904px tall layout).
 pub fn process_page_with_items(
     img_path: &Path,
     source_file: &Path,
     page_number: usize,
     items: Vec<ocr_engine::OcrItem>,
 ) -> Option<PrintoutResult> {
-    process_page_inner(img_path, source_file, page_number, items, None, None)
+    process_page_inner(img_path, source_file, page_number, items, None, None, None)
+}
+
+/// Process a page using pre-computed OCR items with upscaled image height.
+pub fn process_page_with_items_and_height(
+    img_path: &Path,
+    source_file: &Path,
+    page_number: usize,
+    items: Vec<ocr_engine::OcrItem>,
+    upscaled_height: Option<u32>,
+) -> Option<PrintoutResult> {
+    process_page_inner(img_path, source_file, page_number, items, None, None, upscaled_height)
 }
 
 /// Shared implementation for page processing after OCR items are available.
@@ -118,6 +131,7 @@ fn process_page_inner(
     items: Vec<ocr_engine::OcrItem>,
     save: Option<&SaveOptions>,
     t_fullpage: Option<std::time::Duration>,
+    upscaled_height: Option<u32>,
 ) -> Option<PrintoutResult> {
     let t_start = std::time::Instant::now();
 
@@ -136,7 +150,7 @@ fn process_page_inner(
         PrintoutType::BelinAmbrosio => belin::extract(&items),
         _ => {
             let is_topo = matches!(printout_type, PrintoutType::TopometricKcStaging);
-            label_match::match_labels(&items, is_topo)
+            label_match::match_labels_with_height(&items, is_topo, upscaled_height)
         }
     };
 
@@ -150,7 +164,7 @@ fn process_page_inner(
                 name, loc.cy, loc.cx, format!("{:.4}", loc.value), loc.conf, loc.raw_text);
         }
         // Show which archetype fields are MISSING
-        let archetype = field_locate::archetype_for(&printout_type);
+        let archetype = field_locate::archetype_for_with_height(&printout_type, upscaled_height);
         let missing: Vec<_> = archetype.iter()
             .filter(|&&(name, _, _)| !labeled.contains_key(name))
             .collect();
@@ -163,13 +177,40 @@ fn process_page_inner(
     // Step 4: Post-processing corrections
     postprocess::apply_corrections(&mut labeled);
 
-    // Step 5: Routine re-crop of all found Belin fields.
-    // Full-page OCR misreads some values (e.g., "0.88mm" → "0.8mm", sign loss).
-    // Isolated crop OCR reads the same text correctly. Re-crop at the LOCATED
-    // position and re-read for ALL Belin fields. For other printout types, only
-    // re-crop missing/suspicious fields.
-    let archetype = field_locate::archetype_for(&printout_type);
+    // Step 5: Select archetype and fit.
+    // Primary: use image height to detect tall (904px) layout.
+    // Cross-check: if CorneaVol was label-matched, verify its cy position
+    // agrees with the height-based prediction. If mismatch, try the other
+    // archetype and use whichever fits better.
+    let height_says_tall = upscaled_height.map_or(false, field_locate::is_tall_layout);
+    let corneavol_cy = labeled.get("CorneaVol").map(|f| f.cy);
+    let corneavol_says_tall = corneavol_cy.map_or(false, |cy| cy > 2200.0);
+
+    let mut use_tall = height_says_tall;
+
+    // Cross-check: warn and resolve if height and CorneaVol position disagree
+    if corneavol_cy.is_some() && height_says_tall != corneavol_says_tall {
+        eprintln!("  WARNING: layout detection mismatch: height_tall={} corneavol_tall={} (cy={:.0})",
+            height_says_tall, corneavol_says_tall, corneavol_cy.unwrap());
+        // Try both archetypes, pick the one with lower residuals
+        let fit_std = field_locate::fit_affine(&labeled, field_locate::ARCHETYPE_4MAPS);
+        let fit_tall = field_locate::fit_affine(&labeled, field_locate::ARCHETYPE_4MAPS_TALL);
+        use_tall = fit_tall.resid_std < fit_std.resid_std;
+        eprintln!("  Resolved: using {} (resid_std: std={:.1} tall={:.1})",
+            if use_tall { "TALL" } else { "STANDARD" }, fit_std.resid_std, fit_tall.resid_std);
+    }
+
+    let archetype = field_locate::archetype_for_with_height(
+        &printout_type,
+        if use_tall { Some(field_locate::TALL_LAYOUT_HEIGHT_RANGE.0) } else { None },
+    );
     let fit = field_locate::fit_affine(&labeled, archetype);
+
+    if std::env::var("PENTACAM_DEBUG_LABELS").is_ok() {
+        eprintln!("  Layout: {} (height={:?}, CorneaVol cy={:?}, fit resid={:.1}, inliers={}/{})",
+            if use_tall { "TALL" } else { "STANDARD" },
+            upscaled_height, corneavol_cy, fit.resid_std, fit.n_inliers, fit.n_pairs);
+    }
 
     // NOTE: Routine re-crop of all Belin fields does NOT work.
     // Tested both fixed-size (200x60) and tight-bbox crops — both cause massive

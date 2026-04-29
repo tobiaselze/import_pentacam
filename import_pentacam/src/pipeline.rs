@@ -972,8 +972,12 @@ impl PentacamPipeline {
         } else { None };
 
         // Use the SAME OCR items for field extraction (no second OCR run)
+        // Pass upscaled image height for layout variant detection (904px tall layout)
+        let upscaled_h = upscaled_tmp.as_ref().and_then(|_| {
+            page_img.as_ref().map(|img| img.height())
+        });
         let result_opt = if let Some(items) = ocr_items {
-            ocr_import::process_page_with_items(effective_path, path, 1, items)
+            ocr_import::process_page_with_items_and_height(effective_path, path, 1, items, upscaled_h)
         } else {
             None
         };

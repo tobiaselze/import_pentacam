@@ -31,6 +31,17 @@ const BOTTOM_FIELD_NAMES: &[&str] = &[
 /// Returns a map of field_name -> LocatedField for all fields matched by label proximity.
 /// Ambiguous back-surface fields (K1/K2/Km/Astig_back) are skipped — handle in Phase 2.
 pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<String, LocatedField> {
+    match_labels_with_height(items, printout_type_is_topo, None)
+}
+
+/// Label matching with optional upscaled image height for tall layout detection.
+pub fn match_labels_with_height(
+    items: &[OcrItem],
+    printout_type_is_topo: bool,
+    upscaled_height: Option<u32>,
+) -> HashMap<String, LocatedField> {
+    let is_tall = upscaled_height.map_or(false, field_locate::is_tall_layout);
+
     // Sort items by (rounded cy, cx) — same as Python
     let mut items_sorted: Vec<&OcrItem> = items.iter().collect();
     items_sorted.sort_by(|a, b| {
@@ -39,8 +50,11 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
         ay.partial_cmp(&by).unwrap().then(a.cx.partial_cmp(&b.cx).unwrap())
     });
 
-    // Detect zone boundaries from section headers
-    let (front_y, back_y, _tnp_header_y) = detect_zones(&items_sorted, printout_type_is_topo);
+    // Detect zone boundaries from section headers.
+    // On the tall (904px) layout, use wider defaults so that the front
+    // section's bottom rows (Qval/Rmin/Rper at cy~1230) are not misassigned
+    // to the back zone.
+    let (front_y, back_y, _tnp_header_y) = detect_zones(&items_sorted, printout_type_is_topo, is_tall);
     let bottom_y: YRange = (1500.0, 2700.0);
 
     // Build label→field map
@@ -155,7 +169,7 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
     // K1/K2/Km/Astig labels appear in BOTH "Cornea Back" and "True Net Power"
     // sections on Topometric pages. After the affine fit, pick the candidate
     // closest to the affine-predicted position.
-    let archetype = field_locate::archetype_for_type(printout_type_is_topo);
+    let archetype = field_locate::archetype_for_type_with_height(printout_type_is_topo, upscaled_height);
     let fit = field_locate::fit_affine(&labeled, archetype);
 
     let ambig_fields: &[(&str, &[&str])] = &[
@@ -272,7 +286,7 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
     // ── Axis extraction from "(steep)" / "(flat)" tokens ─────────────
     // Runs AFTER Phase 3 so it can fill in Axis fields that the numeric
     // fallback missed (because the token starts with "steep"/"flat").
-    let (front_y, back_y, _) = detect_zones(&items_sorted, printout_type_is_topo);
+    let (front_y, back_y, _) = detect_zones(&items_sorted, printout_type_is_topo, is_tall);
     let steep_re = Regex::new(r"(?i)(?:steep|flat)[^0-9-]*(-?[0-9]+\.?[0-9]*)").unwrap();
     let digits_re = Regex::new(r"^([0-9]+)").unwrap();
 
@@ -342,9 +356,13 @@ pub fn match_labels(items: &[OcrItem], printout_type_is_topo: bool) -> HashMap<S
 }
 
 /// Detect "Cornea Front" / "Cornea Back" / "True Net Power" headers to set zone boundaries.
-fn detect_zones(items: &[&OcrItem], is_topo: bool) -> (YRange, YRange, Option<f32>) {
-    let default_front: YRange = (700.0, 1180.0);
-    let default_back: YRange = (1200.0, 1720.0);
+fn detect_zones(items: &[&OcrItem], is_topo: bool, is_tall: bool) -> (YRange, YRange, Option<f32>) {
+    let (default_front, default_back) = if is_tall {
+        // Tall (904px) layout: front section extends to ~1300, back starts ~1400
+        ((860.0, 1350.0), (1380.0, 1900.0))
+    } else {
+        ((700.0, 1180.0), (1200.0, 1720.0))
+    };
 
     let mut front_header_y: Option<f32> = None;
     let mut back_header_y: Option<f32> = None;
@@ -364,7 +382,7 @@ fn detect_zones(items: &[&OcrItem], is_topo: bool) -> (YRange, YRange, Option<f3
     let (mut front_y, mut back_y) = (default_front, default_back);
 
     if let (Some(fh), Some(bh)) = (front_header_y, back_header_y) {
-        if bh > fh && bh < default_back.0 {
+        if bh > fh && bh < default_back.1 {
             front_y = ((fh - 100.0).max(200.0), bh - 5.0);
             back_y = (bh + 5.0, default_back.1);
         }
