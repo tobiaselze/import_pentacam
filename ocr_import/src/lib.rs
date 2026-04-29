@@ -243,19 +243,21 @@ fn process_page_inner(
     // Step 5d: Physiological range checks — reject crop-rescued values that are
     // obviously wrong (e.g., AC_depth=269 when it should be ~2-5mm). These catch
     // cases where the affine-predicted crop position landed on the wrong field.
+    // Ranges are generous to avoid rejecting extreme-but-real clinical values
+    // (e.g., keratoconus eyes). Only reject values that are clearly OCR garbage.
     let range_checks: &[(&str, f64, f64)] = &[
-        ("AC_depth",     1.0,   6.0),
+        ("AC_depth",     1.0,   7.0),
         ("PupilDia",     1.0,   9.0),
         ("HWTW",         8.0,  15.0),
         ("Angle",        10.0, 70.0),
         ("ChamberVol",   30.0, 400.0),
-        ("CorneaVol",    30.0, 80.0),
+        ("CorneaVol",    25.0, 100.0),
         ("Axis_front",   0.0, 180.0),
         ("Axis_back",    0.0, 180.0),
-        ("Rmin_front",   4.0,  10.0),
-        ("Rmin_back",    3.0,   9.0),
-        ("Rper_front",   5.0,  11.0),
-        ("Rper_back",    4.0,  10.0),
+        ("Rmin_front",   2.0,  11.0),
+        ("Rmin_back",    1.5,  10.0),
+        ("Rper_front",   4.0,  12.0),
+        ("Rper_back",    3.0,  11.0),
     ];
     for &(field, lo, hi) in range_checks {
         if let Some(loc) = labeled.get(field) {
