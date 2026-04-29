@@ -36,6 +36,12 @@ pub fn generate_detailed(raw_csv_path: &Path, output_path: &Path, omit_names: bo
 
     let mut n_visits = 0u32;
     for (hash, rows, col_index) in &groups {
+        // Skip eye-visits with no measurement fields
+        let has_data = ALL_FIELDS.iter().any(|&field| {
+            select_best_value(field, rows, col_index).is_some()
+        });
+        if !has_data { continue; }
+
         let line = format_visit_line(hash, rows, col_index, omit_names, true);
         writeln!(writer, "{}", line).map_err(|e| format!("Write: {}", e))?;
         n_visits += 1;
@@ -68,6 +74,13 @@ pub fn generate_compact(raw_csv_path: &Path, output_path: &Path, omit_names: boo
 
     let mut n_visits = 0u32;
     for (hash, rows, col_index) in &groups {
+        // Skip eye-visits with no measurement fields (e.g., SR-only with
+        // only Belin Progression Index values that don't map to compact columns)
+        let has_data = ALL_FIELDS.iter().any(|&field| {
+            select_best_value(field, rows, col_index).is_some()
+        });
+        if !has_data { continue; }
+
         let line = format_visit_line(hash, rows, col_index, omit_names, false);
         writeln!(writer, "{}", line).map_err(|e| format!("Write: {}", e))?;
         n_visits += 1;

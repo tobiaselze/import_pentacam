@@ -201,6 +201,10 @@ pub fn match_labels_with_height(
             // Only consider labels in the left portion of the page (cx < 500)
             // to avoid matching annotations/scale text
             if item.cx > 500.0 { continue; }
+            // Only consider labels within the detected back zone — prevents
+            // picking TNP or front-section labels on layouts where the archetype
+            // position prediction is wrong (e.g., full-layout Topo pages).
+            if !in_range(item.cy, back_y) { continue; }
 
             // Find first numeric token to the right on same row
             for item2 in &items_sorted {

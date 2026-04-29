@@ -79,6 +79,13 @@ pub fn map_sr_to_fields(sr: &HashMap<String, f64>) -> (HashMap<String, f64>, Has
     let mut confs = HashMap::new();
     for &(sr_code, field_name) in SR_FIELD_MAP {
         if let Some(&val) = sr.get(sr_code) {
+            // RSAGMIN is "Minimum Axial/Sagittal Radius of Curvature" in mm.
+            // OCR extracts Kmax in diopters. Convert: D = 337.5 / radius_mm.
+            let val = if sr_code == "DICOM_RSAGMIN" && val > 0.0 {
+                337.5 / val
+            } else {
+                val
+            };
             // Don't overwrite if already set (first mapping wins for duplicates like BAM/BAH)
             fields.entry(field_name.to_string()).or_insert(val);
             confs.entry(field_name.to_string()).or_insert(1.0_f32);

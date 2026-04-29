@@ -254,6 +254,8 @@ fn process_page_inner(
         ("CorneaVol",    25.0, 100.0),
         ("Axis_front",   0.0, 180.0),
         ("Axis_back",    0.0, 180.0),
+        ("Astig_front",  0.0,  20.0),
+        ("Astig_back",   0.0,  15.0),
         ("Rmin_front",   2.0,  11.0),
         ("Rmin_back",    1.5,  10.0),
         ("Rper_front",   4.0,  12.0),
