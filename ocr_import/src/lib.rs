@@ -255,16 +255,26 @@ fn process_page_inner(
         }
     }
 
+    // For archetype selection, pass actual upscaled height when available,
+    // or the tall-layout sentinel when height cross-check determined tall.
+    // Gen1 archetype selection needs the real height to distinguish 930/992 variants.
+    let height_for_archetype = upscaled_height.or_else(|| {
+        if use_tall { Some(field_locate::TALL_LAYOUT_HEIGHT_RANGE.0) } else { None }
+    });
     let archetype = field_locate::archetype_for_with_height(
         &printout_type,
-        if use_tall { Some(field_locate::TALL_LAYOUT_HEIGHT_RANGE.0) } else { None },
+        height_for_archetype,
     );
     let fit = field_locate::fit_affine(&labeled, archetype);
 
     if std::env::var("PENTACAM_DEBUG_LABELS").is_ok() {
+        let layout_name = match &printout_type {
+            PrintoutType::Other(s) if s.contains("gen1") => "GEN1",
+            _ if use_tall => "TALL",
+            _ => "STANDARD",
+        };
         eprintln!("  Layout: {} (height={:?}, CorneaVol cy={:?}, fit resid={:.1}, inliers={}/{})",
-            if use_tall { "TALL" } else { "STANDARD" },
-            upscaled_height, corneavol_cy, fit.resid_std, fit.n_inliers, fit.n_pairs);
+            layout_name, upscaled_height, corneavol_cy, fit.resid_std, fit.n_inliers, fit.n_pairs);
     }
 
     // NOTE: Routine re-crop of all Belin fields does NOT work.

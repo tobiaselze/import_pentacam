@@ -119,6 +119,113 @@ pub fn is_tall_layout(upscaled_height: u32) -> bool {
         && upscaled_height <= TALL_LAYOUT_HEIGHT_RANGE.1
 }
 
+/// (cy_A, cx_A) for each field on Gen1 (pre-2010) Refractive pages,
+/// 1280x930 variant (upscaled to ~3500x2542). This variant does NOT have
+/// a Kmax row in the data table. HWTW slot contains KPD (handled by KPD guard).
+/// Measured from label matching debug output on production files.
+pub const ARCHETYPE_GEN1_930: &[(&str, f32, f32)] = &[
+    ("Rf_front",        684.0,  472.0),
+    ("Rs_front",        775.0,  473.0),
+    ("Rm_front",        869.0,  473.0),
+    ("K1_front",        683.0,  810.0),
+    ("K2_front",        777.0,  808.0),
+    ("Km_front",        869.0,  808.0),
+    ("Astig_front",     961.0,  800.0),
+    ("Axis_front",      961.0,  447.0),
+    ("Rmin_front",     1055.0,  822.0),
+    ("Rper_front",     1056.0,  472.0),
+    ("Rf_back",        1239.0,  472.0),
+    ("Rs_back",        1333.0,  470.0),
+    ("Rm_back",        1427.0,  472.0),
+    ("K1_back",        1240.0,  804.0),
+    ("K2_back",        1334.0,  804.0),
+    ("Km_back",        1427.0,  804.0),
+    ("Astig_back",     1519.0,  800.0),
+    ("Axis_back",      1517.0,  465.0),
+    ("Rmin_back",      1611.0,  822.0),
+    ("Rper_back",      1611.0,  472.0),
+    ("PupilCenter",    1815.0,  465.0),
+    ("PachyVertex",    1910.0,  463.0),
+    ("Thinnest",       2006.0,  465.0),
+    // NO Kmax on this variant
+    ("PupilCenter_x",  1815.0,  724.0),
+    ("PupilCenter_y",  1814.0,  892.0),
+    ("PachyVertex_x",  1911.0,  715.0),
+    ("PachyVertex_y",  1912.0,  881.0),
+    ("Thinnest_x",     2008.0,  728.0),
+    ("Thinnest_y",     2006.0,  892.0),
+    ("CorneaVol",      2112.0,  480.0),
+    ("HWTW",           2112.0,  848.0),
+    ("ChamberVol",     2206.0,  474.0),
+    ("Angle",          2208.0,  843.0),
+    ("AC_depth",       2304.0,  470.0),
+    ("PupilDia",       2304.0,  860.0),
+    ("Qval_front",     1056.0,  204.0),
+    ("Qval_back",      1614.0,  195.0),
+];
+
+/// (cy_A, cx_A) for each field on Gen1 (pre-2010) Refractive pages,
+/// 1280x992 variant (upscaled to ~3500x2712). This variant HAS Kmax
+/// and HWTW (labeled "Ø Cornea"). Measured from label matching debug output.
+pub const ARCHETYPE_GEN1_992: &[(&str, f32, f32)] = &[
+    ("Rf_front",        739.0,  453.0),
+    ("Rs_front",        838.0,  453.0),
+    ("Rm_front",        937.0,  452.0),
+    ("K1_front",        741.0,  768.0),
+    ("K2_front",        837.0,  768.0),
+    ("Km_front",        936.0,  768.0),
+    ("Astig_front",    1036.0,  759.0),
+    ("Axis_front",     1034.0,  436.0),
+    ("Rmin_front",     1133.0,  781.0),
+    ("Rper_front",     1133.0,  453.0),
+    ("Rf_back",        1330.0,  452.0),
+    ("Rs_back",        1428.0,  453.0),
+    ("Rm_back",        1528.0,  453.0),
+    ("K1_back",        1330.0,  764.0),
+    ("K2_back",        1430.0,  766.0),
+    ("Km_back",        1528.0,  764.0),
+    ("Astig_back",     1625.0,  759.0),
+    ("Axis_back",      1627.0,  427.0),
+    ("Rmin_back",      1725.0,  780.0),
+    ("Rper_back",      1724.0,  452.0),
+    ("PupilCenter",    1950.0,  445.0),
+    ("PachyVertex",    2036.0,  445.0),
+    ("Thinnest",       2123.0,  445.0),
+    ("Kmax",           2211.0,  440.0),
+    ("PupilCenter_x",  1949.0,  689.0),
+    ("PupilCenter_y",  1950.0,  835.0),
+    ("PachyVertex_x",  2036.0,  682.0),
+    ("PachyVertex_y",  2036.0,  833.0),
+    ("Thinnest_x",     2125.0,  689.0),
+    ("Thinnest_y",     2126.0,  839.0),
+    ("Kmax_x",         2212.0,  691.0),
+    ("Kmax_y",         2213.0,  844.0),
+    ("CorneaVol",      2320.0,  459.0),
+    ("HWTW",           2320.0,  830.0),
+    ("ChamberVol",     2419.0,  456.0),
+    ("Angle",          2420.0,  795.0),
+    ("AC_depth",       2517.0,  454.0),
+    ("PupilDia",       2517.0,  819.0),
+    ("Qval_front",     1134.0,  197.0),
+    ("Qval_back",      1727.0,  199.0),
+];
+
+/// Upscaled height ranges for gen1 variants.
+pub const GEN1_930_HEIGHT_RANGE: (u32, u32) = (2530, 2560);
+pub const GEN1_992_HEIGHT_RANGE: (u32, u32) = (2700, 2730);
+
+/// Check if an upscaled image height corresponds to a gen1 variant.
+/// Returns the appropriate archetype, or None if not gen1.
+pub fn gen1_archetype_for_height(upscaled_height: u32) -> Option<&'static [(&'static str, f32, f32)]> {
+    if upscaled_height >= GEN1_930_HEIGHT_RANGE.0 && upscaled_height <= GEN1_930_HEIGHT_RANGE.1 {
+        Some(ARCHETYPE_GEN1_930)
+    } else if upscaled_height >= GEN1_992_HEIGHT_RANGE.0 && upscaled_height <= GEN1_992_HEIGHT_RANGE.1 {
+        Some(ARCHETYPE_GEN1_992)
+    } else {
+        None
+    }
+}
+
 /// (cy_A, cx_A) for each field on Topometric/KC-Staging pages.
 pub const ARCHETYPE_TOPO: &[(&str, f32, f32)] = &[
     ("Rf_front",        710.0,  518.0),
@@ -442,6 +549,12 @@ pub fn archetype_for_with_height(
     match printout_type {
         PrintoutType::TopometricKcStaging => ARCHETYPE_TOPO,
         PrintoutType::BelinAmbrosio => ARCHETYPE_BELIN,
+        PrintoutType::Other(s) if s.contains("gen1") => {
+            // Gen1 has two sub-variants distinguished by upscaled height
+            upscaled_height
+                .and_then(gen1_archetype_for_height)
+                .unwrap_or(ARCHETYPE_GEN1_930) // default to more common variant
+        }
         _ => {
             if upscaled_height.map_or(false, is_tall_layout) {
                 ARCHETYPE_4MAPS_TALL
