@@ -233,16 +233,26 @@ fn process_page_inner(
 
     let mut use_tall = height_says_tall;
 
-    // Cross-check: warn and resolve if height and CorneaVol position disagree
+    // Cross-check: warn and resolve if height and CorneaVol position disagree.
+    // Only try both archetypes if height is unknown (None) or borderline.
+    // When height is known and clearly outside the tall range, trust it —
+    // other layouts (gen1 at 1280x992 → 2717px) can have CorneaVol at cy>2200
+    // without being the 904px tall layout.
     if corneavol_cy.is_some() && height_says_tall != corneavol_says_tall {
-        eprintln!("  WARNING: layout detection mismatch: height_tall={} corneavol_tall={} (cy={:.0})",
-            height_says_tall, corneavol_says_tall, corneavol_cy.unwrap());
-        // Try both archetypes, pick the one with lower residuals
-        let fit_std = field_locate::fit_affine(&labeled, field_locate::ARCHETYPE_4MAPS);
-        let fit_tall = field_locate::fit_affine(&labeled, field_locate::ARCHETYPE_4MAPS_TALL);
-        use_tall = fit_tall.resid_std < fit_std.resid_std;
-        eprintln!("  Resolved: using {} (resid_std: std={:.1} tall={:.1})",
-            if use_tall { "TALL" } else { "STANDARD" }, fit_std.resid_std, fit_tall.resid_std);
+        if upscaled_height.is_none() {
+            // No height info — fall back to fitting both archetypes
+            eprintln!("  WARNING: layout detection mismatch (no height): corneavol_tall={} (cy={:.0})",
+                corneavol_says_tall, corneavol_cy.unwrap());
+            let fit_std = field_locate::fit_affine(&labeled, field_locate::ARCHETYPE_4MAPS);
+            let fit_tall = field_locate::fit_affine(&labeled, field_locate::ARCHETYPE_4MAPS_TALL);
+            use_tall = fit_tall.resid_std < fit_std.resid_std;
+            eprintln!("  Resolved: using {} (resid_std: std={:.1} tall={:.1})",
+                if use_tall { "TALL" } else { "STANDARD" }, fit_std.resid_std, fit_tall.resid_std);
+        } else {
+            // Height is known — trust it over CorneaVol position
+            eprintln!("  NOTE: CorneaVol cy={:.0} suggests tall layout but height {} does not — trusting height",
+                corneavol_cy.unwrap(), upscaled_height.unwrap());
+        }
     }
 
     let archetype = field_locate::archetype_for_with_height(
