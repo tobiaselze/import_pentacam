@@ -177,6 +177,51 @@ fn process_page_inner(
     // Step 4: Post-processing corrections
     postprocess::apply_corrections(&mut labeled);
 
+    // Step 4b: Gen1 marker symbol correction.
+    // Gen1 (pre-2010) printouts have marker symbols (◆, ·) in the data table
+    // between field labels and values. PaddleOCR misreads ◆ as "4" and · as "2".
+    // This causes: Kmax=4 (real value pushed to Kmax_x),
+    //              PachyVertex=2 (real value pushed to PachyVertex_x).
+    // Fix: detect and shift values back.
+    if matches!(&printout_type, PrintoutType::Other(s) if s.contains("gen1")) {
+        // Kmax: ◆ read as 4, real value (30-100 D) shifted to Kmax_x
+        if let Some(kmax) = labeled.get("Kmax") {
+            if kmax.value == 4.0 && kmax.conf < 0.7 {
+                if let Some(kmax_x) = labeled.get("Kmax_x") {
+                    if kmax_x.value >= 30.0 && kmax_x.value <= 100.0 {
+                        let real_kmax = kmax_x.clone();
+                        let shifted_x = labeled.get("Kmax_y").cloned();
+                        labeled.insert("Kmax".to_string(), real_kmax);
+                        if let Some(sx) = shifted_x {
+                            labeled.insert("Kmax_x".to_string(), sx);
+                        } else {
+                            labeled.remove("Kmax_x");
+                        }
+                        labeled.remove("Kmax_y");
+                    }
+                }
+            }
+        }
+        // PachyVertex: · read as 2, real value (300-700 µm) shifted to PachyVertex_x
+        if let Some(pachy) = labeled.get("PachyVertex") {
+            if pachy.value == 2.0 && pachy.conf < 0.7 {
+                if let Some(pachy_x) = labeled.get("PachyVertex_x") {
+                    if pachy_x.value >= 300.0 && pachy_x.value <= 700.0 {
+                        let real_pachy = pachy_x.clone();
+                        let shifted_x = labeled.get("PachyVertex_y").cloned();
+                        labeled.insert("PachyVertex".to_string(), real_pachy);
+                        if let Some(sx) = shifted_x {
+                            labeled.insert("PachyVertex_x".to_string(), sx);
+                        } else {
+                            labeled.remove("PachyVertex_x");
+                        }
+                        labeled.remove("PachyVertex_y");
+                    }
+                }
+            }
+        }
+    }
+
     // Step 5: Select archetype and fit.
     // Primary: use image height to detect tall (904px) layout.
     // Cross-check: if CorneaVol was label-matched, verify its cy position
