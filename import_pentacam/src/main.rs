@@ -107,6 +107,14 @@ BACKUP:
   backup step (e.g. to resume an interrupted backup). Before regenerating
   output CSVs, the previous versions are saved as .previous files locally.
 
+UTILITIES:
+
+  regenerate_csvs <output_dir> [-x]
+      Regenerate pentacam_compact.csv and pentacam_detailed.csv from an
+      existing pentacam_raw.csv without reprocessing any files. Useful
+      after manual edits to the raw CSV or to apply updated generation
+      logic. Use -x to omit patient names.
+
 (C) 2026 Tobias Elze
 "#;
 
