@@ -155,7 +155,7 @@ endif
 	echo "Priority: optional" >> dist/$(DEB_PKG)/DEBIAN/control && \
 	echo "Architecture: amd64" >> dist/$(DEB_PKG)/DEBIAN/control && \
 	echo "Installed-Size: $$INSTALLED_SIZE" >> dist/$(DEB_PKG)/DEBIAN/control && \
-	echo "Maintainer: Tobias Elze <tobias.elze@gmail.com>" >> dist/$(DEB_PKG)/DEBIAN/control && \
+	echo "Maintainer: Tobias Elze <tobias-elze@tobias-elze.de>" >> dist/$(DEB_PKG)/DEBIAN/control && \
 	echo "Description: Extract clinical measurements from Pentacam DICOM/PDF/image files" >> dist/$(DEB_PKG)/DEBIAN/control && \
 	echo " Extracts keratometry, pachymetry, and other clinical measurements from" >> dist/$(DEB_PKG)/DEBIAN/control && \
 	echo " Pentacam ophthalmic imaging files. Supports DICOM Structured Reports," >> dist/$(DEB_PKG)/DEBIAN/control && \
