@@ -67,7 +67,8 @@ Note: `make` may not be installed in Git Bash by default. If not, you can
 build manually:
 
     # After running ./configure, extract variables from config.mk:
-    ORT_DIR=$(grep '^ORT_DIR' config.mk | sed 's/.*:= //')
+    ORT_DIR=$(grep '^ORT_DIR'    config.mk | sed 's/.*:= //')
+    WIX_BIN=$(grep '^WIX_BIN'    config.mk | sed 's/.*:= //')
     export ORT_LIB_LOCATION="$ORT_DIR/lib"
     export ORT_PREFER_DYNAMIC_LINK=1
     export LIBCLANG_PATH="C:/Program Files/LLVM/bin"   # adjust if installed elsewhere
@@ -79,6 +80,14 @@ Then assemble the distribution folder:
     cp target/release/import_pentacam.exe dist/import_pentacam/
     cp "$ORT_DIR"/lib/onnxruntime.dll dist/import_pentacam/
     cp models/*.onnx models/*.txt dist/import_pentacam/models/
+
+Then build the MSI installer (equivalent of `make msi`):
+
+    VERSION=$(grep '^version' import_pentacam/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    cargo wix -p import_pentacam --nocapture \
+        --bin-path "$WIX_BIN" \
+        --no-build \
+        -o "dist/import_pentacam-${VERSION}-win-x64.msi"
 
 Configure Options
 -----------------
