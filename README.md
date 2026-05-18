@@ -21,7 +21,10 @@ msiexec /i import_pentacam-0.1.0-win-x64.msi /quiet
 The installer places files under `C:\Program Files\import_pentacam\`, adds
 that directory to the system `PATH`, and registers in Add/Remove Programs.
 
-## Build from source (Linux or Windows)
+## Build from source
+
+Tested on Linux and Windows. macOS likely works with manual ONNX Runtime setup
+(pass `--ort-dir` to `./configure`) but is untested.
 
 See [INSTALL](INSTALL) for prerequisites and full instructions. Quick version:
 
@@ -78,4 +81,4 @@ If you use `import_pentacam` in academic work, please cite:
 
 ## Contact
 
-Tobias Elze — <tobias-elze@tobias-elze.de>
+Bug reports and questions: please open a [GitHub Issue](https://github.com/tobiaselze/import_pentacam/issues).
